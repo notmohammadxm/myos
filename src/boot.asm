@@ -28,6 +28,11 @@ extern kernel_main
 _start:
     cli
 
+    ; Preserve the Multiboot2 values before touching AX for segment setup.
+    ; Loading AX below would otherwise corrupt EAX (the Multiboot2 magic).
+    mov ecx, eax                    ; ECX = Multiboot2 magic
+    mov edx, ebx                    ; EDX = Multiboot2 info pointer
+
     ; Install our own flat 32-bit GDT instead of depending on GRUB's GDT.
     lgdt [gdt_descriptor]
 
@@ -44,9 +49,9 @@ _start:
     mov esp, stack_top
     and esp, 0xFFFFFFF0             ; 16-byte aligned stack
 
-    ; Multiboot2 contract: EAX = magic, EBX = info structure.
-    push ebx
-    push eax
+    ; Multiboot2 contract: first argument = magic, second = info structure.
+    push edx
+    push ecx
     call kernel_main
 
 .hang:
