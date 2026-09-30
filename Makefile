@@ -11,12 +11,17 @@ build/boot.o: src/boot.asm
 	@mkdir -p build
 	$(ASM) -f elf32 $< -o $@
 
+build/int.o: src/interrupts.asm
+	@mkdir -p build
+	$(ASM) -f elf32 $< -o $@
+
 build/kernel.o: src/kernel.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -c $< -o $@
 
-build/myos.elf: build/boot.o build/kernel.o src/linker.ld
-	$(LD) -m elf_i386 -T src/linker.ld -o $@ build/boot.o build/kernel.o
+build/myos.elf: build/boot.o build/int.o build/kernel.o src/linker.ld
+	$(LD) -m elf_i386 -T src/linker.ld -o $@ \
+		build/boot.o build/int.o build/kernel.o
 
 myos.iso: build/myos.elf iso/boot/grub/grub.cfg
 	@mkdir -p iso/boot/grub
