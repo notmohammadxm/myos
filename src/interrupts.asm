@@ -2,7 +2,6 @@ BITS 32
 
 section .text
 
-; C exception handler receives the interrupt number as its only argument.
 extern exception_handler
 
 %macro ISR_NOERR 1
@@ -25,7 +24,7 @@ isr%1:
     pusha
     call exception_handler
     popa
-    add esp, 8                    ; discard int number + CPU error code
+    add esp, 8
     iretd
 %endmacro
 
@@ -63,7 +62,6 @@ ISR_NOERR 29
 ISR_ERR   30
 ISR_NOERR 31
 
-; Hardware IRQs used by MyOS: timer (IRQ0) and keyboard (IRQ1).
 global idt_load
 idt_load:
     mov eax, [esp + 4]

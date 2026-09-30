@@ -1,15 +1,13 @@
 BITS 32
 
-; Multiboot2 header. GRUB scans the beginning of the image for this header.
+; Multiboot2 header.
 section .multiboot
 align 8
 header_start:
-    dd 0xE85250D6                  ; Multiboot2 magic
-    dd 0                            ; architecture = i386
-    dd header_end - header_start    ; header length
+    dd 0xE85250D6
+    dd 0
+    dd header_end - header_start
     dd -(0xE85250D6 + 0 + (header_end - header_start))
-
-    ; End tag: type = 0, flags = 0, size = 8
     dw 0
     dw 0
     dd 8
@@ -18,7 +16,7 @@ header_end:
 section .bss
 align 16
 stack_bottom:
-    resb 16384                     ; 16 KiB kernel stack
+    resb 16384
 stack_top:
 
 section .text
@@ -28,28 +26,28 @@ extern kernel_main
 _start:
     cli
 
-    ; Preserve the Multiboot2 values before touching AX for segment setup.
-    ; Loading AX below would otherwise corrupt EAX (the Multiboot2 magic).
-    mov ecx, eax                    ; ECX = Multiboot2 magic
-    mov edx, ebx                    ; EDX = Multiboot2 info pointer
+    ; Preserve the Multiboot2 values before touching AX.
+    ; EAX = magic, EBX = multiboot info pointer.
+    mov ecx, eax
+    mov edx, ebx
 
-    ; Install our own flat 32-bit GDT instead of depending on GRUB's GDT.
+    ; Install our own flat protected-mode GDT.
     lgdt [gdt_descriptor]
 
-    mov ax, 0x10                    ; flat data selector
+    mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
 
-    jmp 0x08:.reload_cs             ; reload CS with our code selector
+    jmp 0x08:.reload_cs
 
 .reload_cs:
     mov esp, stack_top
-    and esp, 0xFFFFFFF0             ; 16-byte aligned stack
+    and esp, 0xFFFFFFF0
 
-    ; Multiboot2 contract: first argument = magic, second = info structure.
+    ; C calling convention: magic, mb_info.
     push edx
     push ecx
     call kernel_main
@@ -63,9 +61,9 @@ section .rodata
 align 8
 
 gdt_start:
-    dq 0x0000000000000000           ; null descriptor
+    dq 0x0000000000000000
 
-    ; Code: base 0, limit 4 GiB, ring 0, executable/readable, 32-bit.
+    ; Kernel code selector 0x08.
     dw 0xFFFF
     dw 0x0000
     db 0x00
@@ -73,7 +71,7 @@ gdt_start:
     db 0xCF
     db 0x00
 
-    ; Data: base 0, limit 4 GiB, ring 0, writable, 32-bit.
+    ; Kernel data selector 0x10.
     dw 0xFFFF
     dw 0x0000
     db 0x00
