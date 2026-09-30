@@ -1,9 +1,14 @@
-CC       = gcc
-ASM      = nasm
-LD       = ld
+CC       ?= gcc
+ASM      ?= nasm
+LD       ?= ld
+
 CFLAGS   = -m32 -ffreestanding -fno-pie -fno-pic -nostdlib \
            -fno-stack-protector -fno-builtin -fno-common \
-           -fno-asynchronous-unwind-tables -O2 -Wall -Wextra
+           -fno-asynchronous-unwind-tables -fno-unwind-tables \
+           -mno-mmx -mno-sse -mno-sse2 -O2 -Wall -Wextra
+
+LDFLAGS  = -m elf_i386 -T src/linker.ld -nostdlib \
+           -z max-page-size=0x1000 --build-id=none
 
 all: myos.iso
 
@@ -20,7 +25,7 @@ build/kernel.o: src/kernel.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/myos.elf: build/boot.o build/int.o build/kernel.o src/linker.ld
-	$(LD) -m elf_i386 -T src/linker.ld -o $@ \
+	$(LD) $(LDFLAGS) -o $@ \
 		build/boot.o build/int.o build/kernel.o
 
 myos.iso: build/myos.elf iso/boot/grub/grub.cfg
@@ -28,10 +33,13 @@ myos.iso: build/myos.elf iso/boot/grub/grub.cfg
 	cp build/myos.elf iso/boot/myos.elf
 	grub-mkrescue -o $@ iso
 
+verify: build/myos.elf
+	grub-file --is-x86-multiboot2 $<
+
 run: myos.iso
-	qemu-system-i386 -cdrom myos.iso -m 512
+	qemu-system-i386 -cdrom myos.iso -m 512M
 
 clean:
 	rm -rf build myos.iso iso/boot/myos.elf
 
-.PHONY: all run clean
+.PHONY: all verify run clean
