@@ -5,9 +5,12 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -17,14 +20,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            nasm gcc-multilib xorriso mtools \
-            grub-pc-bin grub-common grub-efi-amd64-bin
+            nasm gcc-multilib binutils xorriso mtools \
+            grub-pc-bin grub-common
 
-      - name: Build ISO
-        run: make
+      - name: Build
+        run: make clean all
+
+      - name: Validate Multiboot2 kernel
+        run: make verify
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
           name: myos-iso
           path: myos.iso
+          if-no-files-found: error
