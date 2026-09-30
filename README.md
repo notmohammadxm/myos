@@ -20,10 +20,15 @@ Text-only operating system project for 32-bit x86, booted by GRUB Multiboot2.
 
 ## Build
 
+Run the host-side regression tests first, then build and verify the Multiboot2 kernel.
+
 ```bash
+make test
 make
 make verify
 make run
 ```
+
+The `shutdown` command now uses validated ACPI S5 data when available and otherwise halts the CPU safely. Reboot uses ACPI reset, the 8042 reset path, and finally the chipset reset port as fallbacks.
 
 Everything is session-only for now; persistent filesystems and real user processes are not yet implemented.

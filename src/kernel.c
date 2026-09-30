@@ -11,7 +11,15 @@
 
 #define VGA_WIDTH       80
 #define VGA_HEIGHT      25
+#define VGA_CRTC_INDEX   0x3D4
+#define VGA_CRTC_DATA    0x3D5
+#define VGA_CELLS        (VGA_WIDTH * VGA_HEIGHT)
+#ifdef UNIT_TEST
+static volatile uint16_t unit_test_vga[VGA_CELLS];
+#define VGA_MEMORY ((uintptr_t)unit_test_vga)
+#else
 #define VGA_MEMORY      0xB8000
+#endif
 #define IDT_ENTRIES     256
 #define KBD_BUF_SIZE    256
 #define LINE_MAX        72
@@ -36,6 +44,8 @@ static volatile uint16_t* const vga = (volatile uint16_t*)VGA_MEMORY;
 static int row = 0;
 static int col = 0;
 static uint8_t color = 0x0A;
+static uint16_t line_origin_cell = 0;
+static int line_rendered_len = 0;
 
 static volatile uint8_t kbd_buf[KBD_BUF_SIZE];
 static volatile uint16_t kbd_head = 0;
@@ -52,6 +62,7 @@ static int cursor_pos = 0;
 
 static char history[HISTORY_COUNT][LINE_MAX];
 static int history_count = 0;
+static int history_head = 0;
 static int history_cursor = 0;
 
 static char username[16] = "admin";
@@ -101,6 +112,33 @@ DECL_ISR(24); DECL_ISR(25); DECL_ISR(26); DECL_ISR(27);
 DECL_ISR(28); DECL_ISR(29); DECL_ISR(30); DECL_ISR(31);
 #undef DECL_ISR
 
+#ifdef UNIT_TEST
+static uint32_t unit_test_ports[65536];
+
+static inline void outb(uint16_t port, uint8_t val) {
+    unit_test_ports[port] = (unit_test_ports[port] & 0xFFFFFF00u) | val;
+}
+
+static inline uint8_t inb(uint16_t port) {
+    return (uint8_t)(unit_test_ports[port] & 0xFFu);
+}
+
+static inline uint16_t inw(uint16_t port) {
+    return (uint16_t)(unit_test_ports[port] & 0xFFFFu);
+}
+
+static inline void outw(uint16_t port, uint16_t val) {
+    unit_test_ports[port] = (unit_test_ports[port] & 0xFFFF0000u) | val;
+}
+
+static inline void outl(uint16_t port, uint32_t val) {
+    unit_test_ports[port] = val;
+}
+
+static inline uint32_t inl(uint16_t port) {
+    return unit_test_ports[port];
+}
+#else
 static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
 }
@@ -108,6 +146,12 @@ static inline void outb(uint16_t port, uint8_t val) {
 static inline uint8_t inb(uint16_t port) {
     uint8_t value;
     __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+static inline uint16_t inw(uint16_t port) {
+    uint16_t value;
+    __asm__ volatile("inw %1, %0" : "=a"(value) : "Nd"(port));
     return value;
 }
 
@@ -124,6 +168,7 @@ static inline uint32_t inl(uint16_t port) {
     __asm__ volatile("inl %1, %0" : "=a"(value) : "Nd"(port));
     return value;
 }
+#endif
 
 static inline void io_wait(void) {
     outb(0x80, 0);
@@ -175,24 +220,44 @@ static void str_copy(char* dst, const char* src, int max_len) {
 static void print(const char* s);
 static void draw_banner(void);
 static void prompt(void);
+static void line_editor_set_cursor(void);
 static void pic_eoi(int irq);
 
+static void vga_cursor_set(uint16_t position) {
+    if (position >= VGA_CELLS) position = VGA_CELLS - 1;
+    outb(VGA_CRTC_INDEX, 0x0F);
+    outb(VGA_CRTC_DATA, (uint8_t)(position & 0xFFu));
+    outb(VGA_CRTC_INDEX, 0x0E);
+    outb(VGA_CRTC_DATA, (uint8_t)((position >> 8) & 0xFFu));
+}
+
+static void vga_cursor_init(void) {
+    /* Standard VGA text cursor: enabled, full-height block. */
+    outb(VGA_CRTC_INDEX, 0x0A);
+    outb(VGA_CRTC_DATA, 0x06);
+    outb(VGA_CRTC_INDEX, 0x0B);
+    outb(VGA_CRTC_DATA, 0x0F);
+    vga_cursor_set(0);
+}
+
 static void clear_screen(void) {
-    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; ++i) {
+    for (int i = 0; i < VGA_CELLS; ++i) {
         vga[i] = ((uint16_t)color << 8) | ' ';
     }
     row = 0;
     col = 0;
+    vga_cursor_set(0);
 }
 
 static void scroll(void) {
     for (int i = 0; i < (VGA_HEIGHT - 1) * VGA_WIDTH; ++i) {
         vga[i] = vga[i + VGA_WIDTH];
     }
-    for (int i = (VGA_HEIGHT - 1) * VGA_WIDTH; i < VGA_HEIGHT * VGA_WIDTH; ++i) {
+    for (int i = (VGA_HEIGHT - 1) * VGA_WIDTH; i < VGA_CELLS; ++i) {
         vga[i] = ((uint16_t)color << 8) | ' ';
     }
     row = VGA_HEIGHT - 1;
+    vga_cursor_set((uint16_t)(row * VGA_WIDTH + col));
 }
 
 static void putc(char c) {
@@ -201,12 +266,17 @@ static void putc(char c) {
         ++row;
     } else if (c == '\r') {
         col = 0;
+        vga_cursor_set((uint16_t)(row * VGA_WIDTH));
         return;
     } else if (c == '\b') {
         if (col > 0) {
             --col;
-            vga[row * VGA_WIDTH + col] = ((uint16_t)color << 8) | ' ';
+        } else if (row > 0) {
+            --row;
+            col = VGA_WIDTH - 1;
         }
+        vga[row * VGA_WIDTH + col] = ((uint16_t)color << 8) | ' ';
+        vga_cursor_set((uint16_t)(row * VGA_WIDTH + col));
         return;
     } else if (c == '\t') {
         int spaces = 4 - (col % 4);
@@ -223,6 +293,7 @@ static void putc(char c) {
         ++row;
     }
     if (row >= VGA_HEIGHT) scroll();
+    else vga_cursor_set((uint16_t)(row * VGA_WIDTH + col));
 }
 
 static void print(const char* s) {
@@ -254,11 +325,15 @@ static void print_uint(uint32_t value) {
 }
 
 static void print_int(int32_t value) {
+    uint32_t magnitude;
     if (value < 0) {
         putc('-');
-        value = -value;
+        magnitude = (uint32_t)(-(value + 1));
+        ++magnitude;
+    } else {
+        magnitude = (uint32_t)value;
     }
-    print_uint((uint32_t)value);
+    print_uint(magnitude);
 }
 
 static void print_hex8(uint8_t value) {
@@ -441,8 +516,15 @@ static uint8_t weekday_calc(int year, int month, int day) {
                       t[month-1] + day) % 7);
 }
 
-static void rtc_read(struct rtc_time* t) {
-    while (rtc_read_reg(0x0A) & 0x80) { }
+static int rtc_ready(void) {
+    for (uint32_t i = 0; i < 1000000u; ++i) {
+        if (!(rtc_read_reg(0x0A) & 0x80u)) return 1;
+    }
+    return 0;
+}
+
+static int rtc_read(struct rtc_time* t) {
+    if (!rtc_ready()) return 0;
 
     uint8_t sec = rtc_read_reg(0x00);
     uint8_t min = rtc_read_reg(0x02);
@@ -483,8 +565,12 @@ static void rtc_read(struct rtc_time* t) {
     t->hour = hour;
     t->day = day;
     t->month = month;
+    if (month < 1 || month > 12 || day < 1 || day > (uint8_t)days_in_month(full_year, month))
+        return 0;
+
     t->year = full_year;
     t->weekday = weekday_calc(full_year, month, day);
+    return 1;
 }
 
 static void print_2d(uint32_t n) {
@@ -520,7 +606,10 @@ static void print_time_value(const struct rtc_time* t) {
 
 static void cmd_time(void) {
     struct rtc_time t;
-    rtc_read(&t);
+    if (!rtc_read(&t)) {
+        print_color("RTC read failed.\n", 0x0C);
+        return;
+    }
     print_time_value(&t);
     print(" - ");
     print(weekday_name(t.weekday));
@@ -557,7 +646,10 @@ static void cmd_clock(void) {
         if ((uint32_t)(timer_ticks - last) >= 100u) {
             last = timer_ticks;
             struct rtc_time t;
-            rtc_read(&t);
+            if (!rtc_read(&t)) {
+                print("\rTime unavailable       ");
+                continue;
+            }
             print("\rTime ");
             print_time_value(&t);
             print("        ");
@@ -568,7 +660,10 @@ static void cmd_clock(void) {
 
 static void cmd_calendar(void) {
     struct rtc_time t;
-    rtc_read(&t);
+    if (!rtc_read(&t)) {
+        print_color("RTC read failed.\n", 0x0C);
+        return;
+    }
     int y = t.year;
     int m = t.month;
     int first = weekday_calc(y, m, 1);
@@ -617,6 +712,32 @@ static void parse_multiboot_info(uint32_t addr) {
     }
 }
 
+#ifdef UNIT_TEST
+static int cpuid_supported(void) {
+    return 1;
+}
+#else
+static int cpuid_supported(void) {
+    uint32_t before, after;
+    __asm__ volatile(
+        "pushfl\n\t"
+        "popl %0\n\t"
+        "movl %0, %1\n\t"
+        "xorl $0x200000, %1\n\t"
+        "pushl %1\n\t"
+        "popfl\n\t"
+        "pushfl\n\t"
+        "popl %1\n\t"
+        "pushl %0\n\t"
+        "popfl"
+        : "=r"(before), "=r"(after)
+        :
+        : "cc"
+    );
+    return ((before ^ after) & 0x200000u) != 0;
+}
+#endif
+
 static void cpuid(uint32_t leaf, uint32_t* a, uint32_t* b,
                   uint32_t* c, uint32_t* d) {
     __asm__ volatile(
@@ -626,10 +747,16 @@ static void cpuid(uint32_t leaf, uint32_t* a, uint32_t* b,
     );
 }
 
-static void cpu_vendor(char* out, int len) {
+static uint32_t cpuid_max_leaf(void) {
     uint32_t a, b, c, d;
     cpuid(0, &a, &b, &c, &d);
-    if (len < 13) return;
+    return a;
+}
+
+static int cpu_vendor(char* out, int len) {
+    uint32_t a, b, c, d;
+    if (len < 13 || !cpuid_supported()) return 0;
+    cpuid(0, &a, &b, &c, &d);
     out[0]  = (char)(b & 0xFF); out[1]  = (char)((b >> 8) & 0xFF);
     out[2]  = (char)((b >> 16) & 0xFF); out[3]  = (char)((b >> 24) & 0xFF);
     out[4]  = (char)(d & 0xFF); out[5] = (char)((d >> 8) & 0xFF);
@@ -637,26 +764,35 @@ static void cpu_vendor(char* out, int len) {
     out[8]  = (char)(c & 0xFF); out[9] = (char)((c >> 8) & 0xFF);
     out[10] = (char)((c >> 16) & 0xFF); out[11] = (char)((c >> 24) & 0xFF);
     out[12] = 0;
+    return 1;
 }
 
-static uint8_t cpu_family(void) {
+static int cpu_family(uint8_t* out_family) {
     uint32_t a, b, c, d;
+    if (!cpuid_supported() || cpuid_max_leaf() < 1u) return 0;
     cpuid(1, &a, &b, &c, &d);
     uint32_t base = (a >> 8) & 0x0F;
     uint32_t ext  = (a >> 20) & 0xFF;
-    return (uint8_t)(base + (base == 0x0F ? ext : 0));
+    *out_family = (uint8_t)(base + (base == 0x0F ? ext : 0));
+    return 1;
 }
 
 static void cmd_sysinfo(void) {
     char vendor[13] = {0};
-    cpu_vendor(vendor, sizeof(vendor));
+    int have_cpuid = cpu_vendor(vendor, sizeof(vendor));
+    uint8_t family = 0;
+    int have_family = cpu_family(&family);
 
     print_color("MyOS System Information\n", 0x0B);
     print("------------------------\n");
     print("OS:         MyOS v0.5\n");
     print("Kernel:     32-bit i386 / Multiboot2\n");
-    print("CPU:        "); print(vendor); putc('\n');
-    print("CPU family: "); print_uint(cpu_family()); putc('\n');
+    print("CPU:        ");
+    if (have_cpuid) print(vendor); else print("CPUID unavailable");
+    putc('\n');
+    print("CPU family: ");
+    if (have_family) print_uint(family); else print("unavailable");
+    putc('\n');
     print("RAM:        ");
     print_uint((mem_lower_kib + mem_upper_kib) / 1024u);
     print(" MiB (reported by Multiboot)\n");
@@ -784,6 +920,9 @@ static void cmd_set(const char* arg) {
 static void prompt(void) {
     print_color(username, 0x0A);
     print("> ");
+    line_origin_cell = (uint16_t)(row * VGA_WIDTH + col);
+    line_rendered_len = 0;
+    line_editor_set_cursor();
 }
 
 /* ---------- Calculator ---------- */
@@ -806,12 +945,68 @@ static int32_t calc_number(struct calc_parser* p) {
 
     while (*p->s >= '0' && *p->s <= '9') {
         found = 1;
-        n = n * 10 + (*p->s - '0');
+        int64_t next = (int64_t)n * 10 + (*p->s - '0');
+        if (next > 2147483647LL) {
+            p->error = 1;
+            return 0;
+        }
+        n = (int32_t)next;
         ++p->s;
     }
 
     if (!found) p->error = 1;
     return n;
+}
+
+static int32_t calc_negate(struct calc_parser* p, int32_t value) {
+    if (value == (-2147483647 - 1)) {
+        p->error = 1;
+        return 0;
+    }
+    return -value;
+}
+
+static int32_t calc_add(struct calc_parser* p, int32_t a, int32_t b) {
+    int64_t v = (int64_t)a + b;
+    if (v < (-2147483647LL - 1) || v > 2147483647LL) {
+        p->error = 1;
+        return 0;
+    }
+    return (int32_t)v;
+}
+
+static int32_t calc_sub(struct calc_parser* p, int32_t a, int32_t b) {
+    int64_t v = (int64_t)a - b;
+    if (v < (-2147483647LL - 1) || v > 2147483647LL) {
+        p->error = 1;
+        return 0;
+    }
+    return (int32_t)v;
+}
+
+static int32_t calc_mul(struct calc_parser* p, int32_t a, int32_t b) {
+    int64_t v = (int64_t)a * b;
+    if (v < (-2147483647LL - 1) || v > 2147483647LL) {
+        p->error = 1;
+        return 0;
+    }
+    return (int32_t)v;
+}
+
+static int32_t calc_div(struct calc_parser* p, int32_t a, int32_t b) {
+    if (b == 0 || (a == (-2147483647 - 1) && b == -1)) {
+        p->error = 1;
+        return 0;
+    }
+    return a / b;
+}
+
+static int32_t calc_mod(struct calc_parser* p, int32_t a, int32_t b) {
+    if (b == 0 || (a == (-2147483647 - 1) && b == -1)) {
+        p->error = 1;
+        return 0;
+    }
+    return a % b;
 }
 
 static int32_t calc_power(struct calc_parser* p) {
@@ -841,19 +1036,24 @@ static int32_t calc_power(struct calc_parser* p) {
         value = calc_number(p);
     }
 
-    if (neg) value = -value;
+    if (p->error) return 0;
+    if (neg) value = calc_negate(p, value);
+    if (p->error) return 0;
 
     calc_spaces(p);
     if (*p->s == '^') {
         ++p->s;
         int32_t exponent = calc_power(p);
-        if (exponent < 0 || exponent > 31) {
+        if (p->error || exponent < 0 || exponent > 31) {
             p->error = 1;
             return 0;
         }
         int32_t base = value;
         int32_t result = 1;
-        for (int32_t i = 0; i < exponent; ++i) result *= base;
+        for (int32_t i = 0; i < exponent; ++i) {
+            result = calc_mul(p, result, base);
+            if (p->error) return 0;
+        }
         value = result;
     }
 
@@ -862,6 +1062,7 @@ static int32_t calc_power(struct calc_parser* p) {
 
 static int32_t calc_term(struct calc_parser* p) {
     int32_t result = calc_power(p);
+    if (p->error) return 0;
 
     for (;;) {
         calc_spaces(p);
@@ -872,14 +1073,10 @@ static int32_t calc_term(struct calc_parser* p) {
         int32_t rhs = calc_power(p);
         if (p->error) return 0;
 
-        if ((op == '/' || op == '%') && rhs == 0) {
-            p->error = 1;
-            return 0;
-        }
-
-        if (op == '*') result *= rhs;
-        else if (op == '/') result /= rhs;
-        else result %= rhs;
+        if (op == '*') result = calc_mul(p, result, rhs);
+        else if (op == '/') result = calc_div(p, result, rhs);
+        else result = calc_mod(p, result, rhs);
+        if (p->error) return 0;
     }
 
     return result;
@@ -887,6 +1084,7 @@ static int32_t calc_term(struct calc_parser* p) {
 
 static int32_t calc_expr(struct calc_parser* p) {
     int32_t result = calc_term(p);
+    if (p->error) return 0;
 
     for (;;) {
         calc_spaces(p);
@@ -897,8 +1095,9 @@ static int32_t calc_expr(struct calc_parser* p) {
         int32_t rhs = calc_term(p);
         if (p->error) return 0;
 
-        if (op == '+') result += rhs;
-        else result -= rhs;
+        if (op == '+') result = calc_add(p, result, rhs);
+        else result = calc_sub(p, result, rhs);
+        if (p->error) return 0;
     }
 
     return result;
@@ -933,20 +1132,23 @@ static void cmd_calc(const char* expr) {
 static void history_add(const char* text) {
     if (!*text) return;
 
-    if (history_count > 0 &&
-        streq(history[(history_count - 1) % HISTORY_COUNT], text)) {
-        history_cursor = history_count;
-        return;
+    if (history_count > 0) {
+        int last = (history_head + HISTORY_COUNT - 1) % HISTORY_COUNT;
+        if (streq(history[last], text)) {
+            history_cursor = history_count;
+            return;
+        }
     }
 
-    int idx;
-    if (history_count < HISTORY_COUNT) {
-        idx = history_count++;
-    } else {
-        idx = history_count % HISTORY_COUNT;
-    }
-    str_copy(history[idx], text, LINE_MAX);
+    str_copy(history[history_head], text, LINE_MAX);
+    history_head = (history_head + 1) % HISTORY_COUNT;
+    if (history_count < HISTORY_COUNT) ++history_count;
     history_cursor = history_count;
+}
+
+static int history_index(int logical_index) {
+    int oldest = (history_head + HISTORY_COUNT - history_count) % HISTORY_COUNT;
+    return (oldest + logical_index) % HISTORY_COUNT;
 }
 
 static const char* command_names[] = {
@@ -957,17 +1159,44 @@ static const char* command_names[] = {
     "reboot","shutdown"
 };
 
-static void erase_line_visual(void) {
-    for (int i = 0; i < cursor_pos; ++i) putc('\b');
-    for (int i = 0; i < line_len; ++i) putc(' ');
-    for (int i = 0; i < line_len; ++i) putc('\b');
-    cursor_pos = 0;
+static void line_editor_ensure_visible(void) {
+    /* The prompt plus a maximum-length command can span two rows.
+     * Keep the cursor and the whole editable line inside VGA memory. */
+    while ((uint32_t)line_origin_cell + (uint32_t)line_len + 1u >= VGA_CELLS) {
+        scroll();
+        if (line_origin_cell >= VGA_WIDTH)
+            line_origin_cell = (uint16_t)(line_origin_cell - VGA_WIDTH);
+        else
+            line_origin_cell = 0;
+    }
+}
+
+static void line_editor_set_cursor(void) {
+    uint32_t pos = (uint32_t)line_origin_cell + (uint32_t)cursor_pos;
+    if (pos >= VGA_CELLS) pos = VGA_CELLS - 1;
+    row = (int)(pos / VGA_WIDTH);
+    col = (int)(pos % VGA_WIDTH);
+    vga_cursor_set((uint16_t)pos);
 }
 
 static void redraw_line(void) {
-    erase_line_visual();
-    for (int i = 0; i < line_len; ++i) putc(line[i]);
-    cursor_pos = line_len;
+    line_editor_ensure_visible();
+
+    int clear_len = line_rendered_len > line_len ? line_rendered_len : line_len;
+    for (int i = 0; i < clear_len; ++i) {
+        uint32_t cell = (uint32_t)line_origin_cell + (uint32_t)i;
+        if (cell < VGA_CELLS)
+            vga[cell] = ((uint16_t)color << 8) | ' ';
+    }
+
+    for (int i = 0; i < line_len; ++i) {
+        uint32_t cell = (uint32_t)line_origin_cell + (uint32_t)i;
+        if (cell < VGA_CELLS)
+            vga[cell] = ((uint16_t)color << 8) | (uint8_t)line[i];
+    }
+
+    line_rendered_len = line_len;
+    line_editor_set_cursor();
 }
 
 static void set_line(const char* text) {
@@ -983,15 +1212,11 @@ static void cmd_history(void) {
         return;
     }
     print("Command history:\n");
-    int start = (history_count < HISTORY_COUNT) ? 0 : history_count % HISTORY_COUNT;
-    int shown = (history_count < HISTORY_COUNT) ? history_count : HISTORY_COUNT;
-
-    for (int i = 0; i < shown; ++i) {
-        int idx = (start + i) % HISTORY_COUNT;
+    for (int i = 0; i < history_count; ++i) {
         print("  ");
         print_uint((uint32_t)(i + 1));
         print("  ");
-        print(history[idx]);
+        print(history[history_index(i)]);
         putc('\n');
     }
 }
@@ -1002,6 +1227,13 @@ static int first_token_len(const char* s) {
     return n;
 }
 
+static int command_matches_prefix(const char* name, const char* prefix, int n) {
+    for (int i = 0; i < n; ++i) {
+        if (!name[i] || name[i] != prefix[i]) return 0;
+    }
+    return 1;
+}
+
 static void cmd_complete(void) {
     if (line_len == 0) {
         set_line("help");
@@ -1009,20 +1241,13 @@ static void cmd_complete(void) {
     }
 
     int n = first_token_len(line);
-    if (n == 0 || n >= LINE_MAX) return;
+    if (n <= 0 || n >= LINE_MAX) return;
 
     int matches = 0;
     const char* match = 0;
 
     for (size_t i = 0; i < sizeof(command_names) / sizeof(command_names[0]); ++i) {
-        int ok = 1;
-        for (int j = 0; j < n; ++j) {
-            if (command_names[i][j] != line[j]) {
-                ok = 0;
-                break;
-            }
-        }
-        if (ok) {
+        if (command_matches_prefix(command_names[i], line, n)) {
             ++matches;
             match = command_names[i];
         }
@@ -1033,19 +1258,14 @@ static void cmd_complete(void) {
     } else if (matches > 1) {
         putc('\n');
         for (size_t i = 0; i < sizeof(command_names) / sizeof(command_names[0]); ++i) {
-            int ok = 1;
-            for (int j = 0; j < n; ++j) {
-                if (command_names[i][j] != line[j]) ok = 0;
-            }
-            if (ok) {
+            if (command_matches_prefix(command_names[i], line, n)) {
                 print(command_names[i]);
                 print("  ");
             }
         }
         putc('\n');
         prompt();
-        for (int i = 0; i < line_len; ++i) putc(line[i]);
-        cursor_pos = line_len;
+        redraw_line();
     }
 }
 
@@ -1188,6 +1408,289 @@ static void cmd_help(const char* topic) {
     print("\nTopics: help shell | help system | help network | help all\n");
 }
 
+/* ---------- ACPI power management ---------- */
+
+struct acpi_rsdp {
+    char signature[8];
+    uint8_t checksum;
+    char oemid[6];
+    uint8_t revision;
+    uint32_t rsdt_address;
+    uint32_t length;
+    uint64_t xsdt_address;
+    uint8_t extended_checksum;
+    uint8_t reserved[3];
+} __attribute__((packed));
+
+struct acpi_sdt_header {
+    char signature[4];
+    uint32_t length;
+    uint8_t revision;
+    uint8_t checksum;
+    char oemid[6];
+    char oem_table_id[8];
+    uint32_t oem_revision;
+    uint32_t creator_id;
+    uint32_t creator_revision;
+} __attribute__((packed));
+
+struct acpi_gas {
+    uint8_t address_space;
+    uint8_t bit_width;
+    uint8_t bit_offset;
+    uint8_t access_size;
+    uint64_t address;
+} __attribute__((packed));
+
+struct acpi_fadt {
+    struct acpi_sdt_header h;
+    uint32_t firmware_ctrl;
+    uint32_t dsdt;
+    uint8_t reserved1;
+    uint8_t preferred_power_management_profile;
+    uint16_t sci_interrupt;
+    uint32_t smi_command;
+    uint8_t acpi_enable;
+    uint8_t acpi_disable;
+    uint8_t s4bios_req;
+    uint8_t pstate_control;
+    uint32_t pm1a_event_block;
+    uint32_t pm1b_event_block;
+    uint32_t pm1a_control_block;
+    uint32_t pm1b_control_block;
+    uint32_t pm2_control_block;
+    uint32_t pm_timer_block;
+    uint32_t gpe0_block;
+    uint32_t gpe1_block;
+    uint8_t pm1_event_length;
+    uint8_t pm1_control_length;
+    uint8_t pm2_control_length;
+    uint8_t pm_timer_length;
+    uint8_t gpe0_length;
+    uint8_t gpe1_length;
+    uint8_t gpe1_base;
+    uint8_t cstate_control;
+    uint16_t worst_c2_latency;
+    uint16_t worst_c3_latency;
+    uint16_t flush_size;
+    uint16_t flush_stride;
+    uint8_t duty_offset;
+    uint8_t duty_width;
+    uint8_t day_alarm;
+    uint8_t month_alarm;
+    uint8_t century;
+    uint16_t boot_architecture_flags;
+    uint8_t reserved2;
+    uint32_t flags;
+    struct acpi_gas reset_reg;
+    uint8_t reset_value;
+} __attribute__((packed));
+
+static uint8_t acpi_checksum(const void* addr, uint32_t length) {
+    const uint8_t* p = (const uint8_t*)addr;
+    uint8_t sum = 0;
+    for (uint32_t i = 0; i < length; ++i) sum = (uint8_t)(sum + p[i]);
+    return sum;
+}
+
+static int acpi_sig4(const struct acpi_sdt_header* h, char a, char b, char c, char d) {
+    return h->signature[0] == a && h->signature[1] == b &&
+           h->signature[2] == c && h->signature[3] == d;
+}
+
+static int acpi_sig8(const struct acpi_rsdp* r) {
+    static const char sig[] = "RSD PTR ";
+    for (int i = 0; i < 8; ++i) if (r->signature[i] != sig[i]) return 0;
+    return 1;
+}
+
+static struct acpi_rsdp* acpi_find_rsdp(void) {
+    uint16_t ebda_segment;
+    __asm__ volatile("movw 0x40E, %0" : "=r"(ebda_segment) : : "memory");
+    uint32_t ebda = (uint32_t)ebda_segment << 4;
+    uint32_t ranges[2][2] = {
+        { ebda, ebda ? ebda + 1024u : 0u },
+        { 0x000E0000u, 0x00100000u }
+    };
+
+    for (int r = 0; r < 2; ++r) {
+        uint32_t start = ranges[r][0] & ~15u;
+        uint32_t end = ranges[r][1];
+        if (r == 0 && (start >= 0x000A0000u || end > 0x000A0000u)) continue;
+        if (!end || start >= end) continue;
+        for (uint32_t p = start; p + 20u <= end; p += 16u) {
+            struct acpi_rsdp* rsdp = (struct acpi_rsdp*)(uintptr_t)p;
+            if (!acpi_sig8(rsdp)) continue;
+            if (acpi_checksum(rsdp, 20u) != 0) continue;
+            if (rsdp->revision >= 2) {
+                uint32_t len = rsdp->length;
+                if (len < 36u || len > 0x100000u || len > end - p ||
+                    acpi_checksum(rsdp, len) != 0) continue;
+            }
+            return rsdp;
+        }
+    }
+    return (struct acpi_rsdp*)0;
+}
+
+static struct acpi_fadt* acpi_find_fadt(void) {
+    struct acpi_rsdp* rsdp = acpi_find_rsdp();
+    if (!rsdp || !rsdp->rsdt_address) return (struct acpi_fadt*)0;
+
+    struct acpi_sdt_header* rsdt = (struct acpi_sdt_header*)(uintptr_t)rsdp->rsdt_address;
+    if (!acpi_sig4(rsdt, 'R','S','D','T') || rsdt->length < 36u ||
+        rsdt->length > 0x100000u || acpi_checksum(rsdt, rsdt->length) != 0)
+        return (struct acpi_fadt*)0;
+
+    uint32_t bytes = rsdt->length - 36u;
+    uint32_t count = bytes / 4u;
+    const uint32_t* entries = (const uint32_t*)((const uint8_t*)rsdt + 36u);
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!entries[i]) continue;
+        struct acpi_sdt_header* h = (struct acpi_sdt_header*)(uintptr_t)entries[i];
+        if (!acpi_sig4(h, 'F','A','C','P') || h->length < 116u) continue;
+        if (acpi_checksum(h, h->length) != 0) continue;
+        return (struct acpi_fadt*)h;
+    }
+    return (struct acpi_fadt*)0;
+}
+
+static int aml_pkg_length(const uint8_t* p, uint32_t remaining, uint32_t* length, uint32_t* used) {
+    if (!p || remaining == 0) return 0;
+    uint8_t lead = p[0];
+    uint32_t follow = (uint32_t)(lead >> 6);
+    if (follow == 0) {
+        *length = lead & 0x3Fu;
+        *used = 1;
+        return 1;
+    }
+    if (follow > 3 || remaining < follow + 1u) return 0;
+    uint32_t value = lead & 0x0Fu;
+    for (uint32_t i = 0; i < follow; ++i)
+        value |= (uint32_t)p[i + 1] << (4u + 8u * i);
+    *length = value;
+    *used = follow + 1u;
+    return 1;
+}
+
+static int aml_read_integer(const uint8_t* p, uint32_t remaining, uint32_t* value, uint32_t* used) {
+    if (!p || remaining < 1u) return 0;
+    switch (p[0]) {
+        case 0x00: *value = 0; *used = 1; return 1;
+        case 0x01: *value = 1; *used = 1; return 1;
+        case 0x0A:
+            if (remaining < 2u) return 0;
+            *value = p[1]; *used = 2; return 1;
+        case 0x0B:
+            if (remaining < 3u) return 0;
+            *value = (uint32_t)p[1] | ((uint32_t)p[2] << 8); *used = 3; return 1;
+        case 0x0C:
+            if (remaining < 5u) return 0;
+            *value = (uint32_t)p[1] | ((uint32_t)p[2] << 8) |
+                     ((uint32_t)p[3] << 16) | ((uint32_t)p[4] << 24);
+            *used = 5; return 1;
+        case 0x0E:
+            if (remaining < 9u) return 0;
+            if (p[5] || p[6] || p[7] || p[8]) return 0;
+            *value = (uint32_t)p[1] | ((uint32_t)p[2] << 8) |
+                     ((uint32_t)p[3] << 16) | ((uint32_t)p[4] << 24);
+            *used = 9; return 1;
+        default:
+            return 0;
+    }
+}
+
+static int acpi_find_s5(const struct acpi_fadt* fadt, uint16_t* slp_typa, uint16_t* slp_typb) {
+    if (!fadt || !fadt->dsdt) return 0;
+    struct acpi_sdt_header* dsdt = (struct acpi_sdt_header*)(uintptr_t)fadt->dsdt;
+    if (!acpi_sig4(dsdt, 'D','S','D','T') || dsdt->length < 36u ||
+        dsdt->length > 0x100000u || acpi_checksum(dsdt, dsdt->length) != 0)
+        return 0;
+
+    const uint8_t* data = (const uint8_t*)dsdt;
+    for (uint32_t i = 36u; i + 8u < dsdt->length; ++i) {
+        if (data[i] != 0x08 || data[i + 1] != '_' || data[i + 2] != 'S' ||
+            data[i + 3] != '5' || data[i + 4] != '_') continue;
+        const uint8_t* p = data + i + 5u;
+        uint32_t remaining = dsdt->length - (i + 5u);
+        if (remaining < 2u || p[0] != 0x12) continue;
+
+        uint32_t pkg_len, pkg_used;
+        if (!aml_pkg_length(p + 1u, remaining - 1u, &pkg_len, &pkg_used)) continue;
+        if (pkg_len < pkg_used + 1u || pkg_len > remaining - 1u) continue;
+        const uint8_t* body = p + 1u + pkg_used;
+        uint32_t body_left = pkg_len - pkg_used;
+        if (!body_left) continue;
+        uint32_t elements = body[0];
+        if (elements < 2u) continue;
+        uint32_t used_a, used_b, a, b;
+        if (!aml_read_integer(body + 1u, body_left - 1u, &a, &used_a)) continue;
+        if (body_left < 1u + used_a + 1u) continue;
+        if (!aml_read_integer(body + 1u + used_a, body_left - 1u - used_a, &b, &used_b)) continue;
+        (void)used_b;
+        *slp_typa = (uint16_t)(a & 0x07u);
+        *slp_typb = (uint16_t)(b & 0x07u);
+        return 1;
+    }
+    return 0;
+}
+
+static int acpi_enable_if_needed(const struct acpi_fadt* fadt) {
+    if (!fadt || !fadt->pm1a_control_block || fadt->pm1_control_length < 2u) return 0;
+    if (inw((uint16_t)fadt->pm1a_control_block) & 1u) return 1;
+    if (!fadt->smi_command || !fadt->acpi_enable || fadt->smi_command > 0xFFFFu) return 0;
+
+    outb((uint16_t)fadt->smi_command, fadt->acpi_enable);
+    for (uint32_t i = 0; i < 1000000u; ++i) {
+        if (inw((uint16_t)fadt->pm1a_control_block) & 1u) return 1;
+    }
+    return 0;
+}
+
+static int acpi_shutdown(void) {
+    struct acpi_fadt* fadt = acpi_find_fadt();
+    if (!fadt || !fadt->pm1a_control_block || fadt->pm1_control_length < 2u) return 0;
+    if (fadt->pm1a_control_block > 0xFFFFu || fadt->pm1b_control_block > 0xFFFFu) return 0;
+    if (!acpi_enable_if_needed(fadt)) return 0;
+
+    uint16_t a, b;
+    if (!acpi_find_s5(fadt, &a, &b)) return 0;
+    uint16_t value_a = (uint16_t)((a << 10) | 0x2000u);
+    uint16_t value_b = (uint16_t)((b << 10) | 0x2000u);
+    outw((uint16_t)fadt->pm1a_control_block, value_a);
+    if (fadt->pm1b_control_block)
+        outw((uint16_t)fadt->pm1b_control_block, value_b);
+    return 1;
+}
+
+static int acpi_reset(void) {
+    struct acpi_fadt* fadt = acpi_find_fadt();
+    if (!fadt || fadt->h.length < 129u) return 0;
+    if (!(fadt->flags & (1u << 10))) return 0;
+    if (!fadt->reset_reg.address || fadt->reset_reg.address > 0xFFFFFFFFu) return 0;
+
+    if (fadt->reset_reg.address_space == 1 && fadt->reset_reg.address <= 0xFFFFu) {
+        outb((uint16_t)fadt->reset_reg.address, fadt->reset_value);
+        return 1;
+    }
+    if (fadt->reset_reg.address_space == 0) {
+        *(volatile uint8_t*)(uintptr_t)(uint32_t)fadt->reset_reg.address = fadt->reset_value;
+        return 1;
+    }
+    return 0;
+}
+
+static int i8042_reset(void) {
+    for (uint32_t i = 0; i < 1000000u; ++i) {
+        if (!(inb(0x64) & 0x02u)) {
+            outb(0x64, 0xFE);
+            for (volatile uint32_t d = 0; d < 10000u; ++d) { }
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* ---------- command execution ---------- */
 
 static void command_arg_after(const char* cmd, int prefix_len, const char** out) {
@@ -1286,24 +1789,22 @@ static void execute(const char* cmd) {
     else if (streq(cmd, "ping")) cmd_ping("");
     else if (streq(cmd, "reboot")) {
         print_color("\n[*] Rebooting MyOS...\n", 0x0E);
+        log_event("Reboot requested");
+        notify_add("Reboot requested");
         cpu_cli();
-        for (volatile uint32_t i = 0; i < 100000u; ++i) {}
-        outb(0x64, 0xFE);
-        outb(0xCF9, 0x06);
+        if (!acpi_reset() && !i8042_reset())
+            outb(0xCF9, 0x06);
         for (;;) cpu_halt();
     }
     else if (streq(cmd, "shutdown")) {
-        print_color("\n[*] Sending power-off request...\n", 0x0E);
+        print_color("\n[*] Sending ACPI power-off request...\n", 0x0E);
         notify_add("Shutdown requested");
         log_event("Shutdown requested");
         cpu_cli();
 
-        /* Common soft-off values supported by several PC emulators.
-         * If the hypervisor ignores these ports, halt the guest safely.
-         */
-        outw(0x604, 0x2000);
-        outw(0xB004, 0x2000);
-
+        if (!acpi_shutdown()) {
+            print_color("ACPI shutdown unavailable; system halted safely.\n", 0x0C);
+        }
         for (;;) cpu_halt();
     }
     else {
@@ -1405,6 +1906,7 @@ void irq1_handler(void) {
 
     if (code == 0x3A) {
         caps_lock = (uint8_t)!caps_lock;
+        pic_eoi(1);
         return;
     }
 
@@ -1530,6 +2032,7 @@ static void draw_banner(void) {
 }
 
 void kernel_main(uint32_t magic, void* mb_info) {
+    vga_cursor_init();
     clear_screen();
 
     if (magic != 0x36D76289u) {
@@ -1563,25 +2066,25 @@ void kernel_main(uint32_t magic, void* mb_info) {
             if (event == KEY_UP) {
                 if (history_count > 0 && history_cursor > 0) {
                     --history_cursor;
-                    set_line(history[history_cursor % HISTORY_COUNT]);
+                    set_line(history[history_index(history_cursor)]);
                 }
             } else if (event == KEY_DOWN) {
                 if (history_cursor < history_count - 1) {
                     ++history_cursor;
-                    set_line(history[history_cursor % HISTORY_COUNT]);
+                    set_line(history[history_index(history_cursor)]);
                 } else {
                     history_cursor = history_count;
                     set_line("");
                 }
             } else if (event == KEY_LEFT) {
                 if (cursor_pos > 0) {
-                    putc('\b');
                     --cursor_pos;
+                    line_editor_set_cursor();
                 }
             } else if (event == KEY_RIGHT) {
                 if (cursor_pos < line_len) {
-                    putc(line[cursor_pos]);
                     ++cursor_pos;
+                    line_editor_set_cursor();
                 }
             } else if (event == KEY_DELETE) {
                 if (cursor_pos < line_len) {
@@ -1599,6 +2102,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 line_len = 0;
                 cursor_pos = 0;
                 line[0] = 0;
+                line_rendered_len = 0;
                 prompt();
             } else if (event == '\b') {
                 if (cursor_pos > 0) {
