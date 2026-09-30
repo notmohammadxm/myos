@@ -378,16 +378,23 @@ static int kbc_ready(void) {
 
 static void shutdown(void) {
     print_color("\n[*] Shutting down MyOS...\n", 0x0C);
-    cpu_cli();
 
-    /* QEMU/Bochs-compatible ACPI shutdown ports. */
-    outw(0x604,  0x2000);
+    /*
+     * VMware/PIIX4 ACPI soft-off.
+     * Port 0x604 is commonly used by QEMU, while VMware
+     * exposes ACPI/PIIX4 power management rather than relying
+     * on the QEMU-specific shutdown port.
+     */
+
+    /* Disable interrupts before power-off request. */
+    __asm__ volatile("cli");
+
+    /* Try PIIX4/ACPI soft-off. */
     outw(0xB004, 0x2000);
-    outw(0x4004, 0x3400);
 
-    /* Fallback: halt if the virtual/hardware firmware ignores the requests. */
+    /* If the virtual hardware does not accept it, stop safely. */
     for (;;) {
-        cpu_halt();
+        __asm__ volatile("hlt");
     }
 }
 
