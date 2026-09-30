@@ -23,6 +23,9 @@ jobs:
             nasm gcc-multilib binutils xorriso mtools \
             grub-pc-bin grub-common
 
+      - name: Host unit tests
+        run: make test
+
       - name: Build
         run: make clean all
 
