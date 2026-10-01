@@ -52,3 +52,22 @@ The goal is to add GUI functionality without deleting or duplicating the existin
 ## Current limitation
 
 The GUI renderer intentionally uses a fixed static backbuffer because there is no heap allocator yet. The requested boot mode is 1024x768x32. A larger or unsupported framebuffer falls back to the text path.
+
+## GUI Phase 3
+
+- Full-screen PS/2 mouse bounds; cursor can enter top bar and footer.
+- Mouse Y-axis follows the physical screen direction used by the current hardware setup.
+- Topmost window ordering with focus-on-click and constrained dragging.
+- Working window controls: minimize and close.
+- Working dock targets: Terminal, System Information, Settings, Power.
+- Power menu dispatches the existing `reboot` and `shutdown` shell paths.
+- Settings interactions: cycle the existing Matrix/Ice/Amber/Mono themes; toggle notifications and animations.
+- Terminal mouse focus, click-to-position within the active input line, and wheel scrolling.
+- Embedded 8x14 DejaVu Sans Mono-derived bitmap font for cleaner, consistent kernel rendering.
+- GUI rendering remains backbuffered; only the composed frame is copied to the hardware framebuffer.
+
+The GUI remains layered over the existing command engine; existing commands are not removed.
+
+## GUI Phase 4
+
+The GUI now includes a dedicated Calculator window, a five-item dock, application focus/z-order integration, and clickable calculator controls. The original shell calculator remains available unchanged.

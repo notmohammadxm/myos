@@ -3,6 +3,16 @@
 
 #include <stdint.h>
 
+typedef struct {
+    int type;
+    const char* value;
+} gui_action_t;
+
+#define GUI_ACTION_NONE 0
+#define GUI_ACTION_THEME 1
+#define GUI_ACTION_REBOOT 2
+#define GUI_ACTION_SHUTDOWN 3
+
 void gui_init(void);
 int gui_available(void);
 void gui_set_theme(const char* name);
@@ -14,5 +24,7 @@ void gui_terminal_putchar(char c, uint8_t shell_color);
 void gui_redraw(void);
 void gui_present(void);
 void gui_mouse_event(int dx, int dy, int wheel, uint8_t buttons);
+int gui_take_terminal_cursor(int* cursor_pos);
+int gui_poll_action(gui_action_t* action);
 
 #endif

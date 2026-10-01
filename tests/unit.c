@@ -1,3 +1,4 @@
+#include "../src/graphics/font.h"
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -166,6 +167,17 @@ static void test_line_editor(void) {
     check(row == 24 && col == 5);
 }
 
+static void test_font_presence(void) {
+    const uint8_t* a = font8x14_get('A');
+    const uint8_t* z = font8x14_get('Z');
+    int any_a = 0, any_z = 0;
+    for (int i = 0; i < FONT8X14_H; ++i) {
+        any_a |= a[i] != 0;
+        any_z |= z[i] != 0;
+    }
+    check(any_a && any_z);
+}
+
 int test_main(void) {
     test_calculator();
     test_history_ring();
@@ -173,6 +185,7 @@ int test_main(void) {
     test_acpi_s5_parser();
     test_line_editor();
     test_framebuffer_gui();
+    test_font_presence();
     return failures;
 }
 

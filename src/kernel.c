@@ -2116,6 +2116,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     if (gui_available()) {
         (void)mouse_init();
         gui_console_enabled = 1;
+        gui_terminal_clear();
     }
 
     draw_banner();
@@ -2200,6 +2201,35 @@ void kernel_main(uint32_t magic, void* mb_info) {
             while (mouse_poll(&mouse_event)) {
                 gui_mouse_event(mouse_event.dx, mouse_event.dy, mouse_event.wheel,
                                 mouse_event.buttons);
+            }
+
+            int requested_cursor = 0;
+            if (gui_take_terminal_cursor(&requested_cursor)) {
+                if (requested_cursor < 0) requested_cursor = 0;
+                if (requested_cursor > line_len) requested_cursor = line_len;
+                cursor_pos = requested_cursor;
+                line_editor_set_cursor();
+            }
+
+            gui_action_t action;
+            while (gui_poll_action(&action)) {
+                if (action.type == GUI_ACTION_REBOOT) execute("reboot");
+                else if (action.type == GUI_ACTION_SHUTDOWN) execute("shutdown");
+                else if (action.type == GUI_ACTION_THEME) {
+                    static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono" };
+                    int next_theme = 0;
+                    for (size_t i = 0; i < sizeof(gui_theme_names) / sizeof(gui_theme_names[0]); ++i) {
+                        if (streq(current_theme, gui_theme_names[i])) {
+                            next_theme = (int)((i + 1) % (sizeof(gui_theme_names) / sizeof(gui_theme_names[0])));
+                            break;
+                        }
+                    }
+                    current_theme = gui_theme_names[next_theme];
+                    color = (uint8_t)((themes[next_theme].bg << 4) | (themes[next_theme].fg & 0x0F));
+                    gui_set_theme(current_theme);
+                    log_event("Theme changed from GUI");
+                    notify_add("Theme changed");
+                }
             }
             gui_present();
         }

@@ -62,7 +62,7 @@ static void queue_event(int32_t dx, int32_t dy, int32_t wheel, uint8_t new_butto
     uint8_t next = (uint8_t)((head + 1u) % MOUSE_IRQ_BUFFER);
     if (next == tail) return;
     x += dx;
-    y -= dy;
+    y += dy;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x > max_x) x = max_x;
