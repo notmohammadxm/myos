@@ -1,12 +1,17 @@
 #include <stdint.h>
 #include <stddef.h>
+#include "graphics/framebuffer.h"
+#include "graphics/renderer.h"
+#include "gui/gui.h"
+#include "drivers/mouse.h"
 
 /* ============================================================
- * MyOS v0.5 - text-only desktop-style operating environment
+ * MyOS v0.5 - desktop-style operating environment
  * Features:
  *   calculator, themes, history, tab completion, profile,
  *   system info, RTC clock/calendar, task manager,
  *   help center, settings, notifications, logs, network tools.
+ *   GUI: framebuffer desktop, mouse input, graphical terminal shell.
  * ============================================================ */
 
 #define VGA_WIDTH       80
@@ -46,6 +51,7 @@ static int col = 0;
 static uint8_t color = 0x0A;
 static uint16_t line_origin_cell = 0;
 static int line_rendered_len = 0;
+static int gui_console_enabled = 0;
 
 static volatile uint8_t kbd_buf[KBD_BUF_SIZE];
 static volatile uint16_t kbd_head = 0;
@@ -100,6 +106,7 @@ static struct idt_ptr idtp;
 extern void idt_load(uint32_t idt_address);
 extern void irq0_stub(void);
 extern void irq1_stub(void);
+extern void irq12_stub(void);
 
 #define DECL_ISR(n) extern void isr##n(void)
 DECL_ISR(0);  DECL_ISR(1);  DECL_ISR(2);  DECL_ISR(3);
@@ -241,6 +248,13 @@ static void vga_cursor_init(void) {
 }
 
 static void clear_screen(void) {
+    if (gui_console_enabled && gui_available()) {
+        gui_terminal_clear();
+        row = 0;
+        col = 0;
+        line_rendered_len = 0;
+        return;
+    }
     for (int i = 0; i < VGA_CELLS; ++i) {
         vga[i] = ((uint16_t)color << 8) | ' ';
     }
@@ -261,6 +275,10 @@ static void scroll(void) {
 }
 
 static void putc(char c) {
+    if (gui_console_enabled && gui_available()) {
+        gui_terminal_putchar(c, color);
+        return;
+    }
     if (c == '\n') {
         col = 0;
         ++row;
@@ -451,6 +469,7 @@ static const struct theme_def themes[] = {
 static void apply_theme(const struct theme_def* t) {
     color = (uint8_t)((t->bg << 4) | (t->fg & 0x0F));
     current_theme = t->name;
+    if (gui_console_enabled && gui_available()) gui_set_theme(t->name);
     clear_screen();
     print_color("Theme changed to ", t->fg);
     print(t->name);
@@ -693,22 +712,45 @@ static void parse_multiboot_info(uint32_t addr) {
     if (!addr) return;
 
     uint32_t total_size = *(uint32_t*)addr;
-    uint32_t pos = addr + 8;
+    if (total_size < 16u || total_size > 0x01000000u) return;
+    if (addr > 0xFFFFFFFFu - total_size) return;
+
+    uint32_t pos = addr + 8u;
     uint32_t end = addr + total_size;
 
-    while (pos + 8 <= end) {
+    while (pos <= end && end - pos >= 8u) {
         uint32_t type = *(uint32_t*)pos;
         uint32_t size = *(uint32_t*)(pos + 4);
-        if (size < 8) break;
+        if (size < 8u || size > end - pos) break;
 
         if (type == 2 && size > 8) {
             bootloader_name = (const char*)(pos + 8);
         } else if (type == 4 && size >= 16) {
             mem_lower_kib = *(uint32_t*)(pos + 8);
             mem_upper_kib = *(uint32_t*)(pos + 12);
+        } else if (type == 8 && size >= 38) {
+            uint64_t address = *(uint64_t*)(pos + 8);
+            uint32_t pitch = *(uint32_t*)(pos + 16);
+            uint32_t width = *(uint32_t*)(pos + 20);
+            uint32_t height = *(uint32_t*)(pos + 24);
+            uint8_t bpp = *(uint8_t*)(pos + 28);
+            uint8_t fb_type = *(uint8_t*)(pos + 29);
+            if (fb_type == 1u) {
+                uint8_t red_pos = *(uint8_t*)(pos + 32);
+                uint8_t red_mask = *(uint8_t*)(pos + 33);
+                uint8_t green_pos = *(uint8_t*)(pos + 34);
+                uint8_t green_mask = *(uint8_t*)(pos + 35);
+                uint8_t blue_pos = *(uint8_t*)(pos + 36);
+                uint8_t blue_mask = *(uint8_t*)(pos + 37);
+                framebuffer_set_info(address, pitch, width, height, bpp, fb_type,
+                                     red_pos, red_mask, green_pos, green_mask,
+                                     blue_pos, blue_mask);
+            }
         }
 
-        pos += (size + 7u) & ~7u;
+        uint32_t next = (size + 7u) & ~7u;
+        if (next < size || next > end - pos) break;
+        pos += next;
     }
 }
 
@@ -798,6 +840,8 @@ static void cmd_sysinfo(void) {
     print(" MiB (reported by Multiboot)\n");
     print("Bootloader: "); print(bootloader_name); putc('\n');
     print("Theme:      "); print(current_theme); putc('\n');
+    print("Graphics:   "); print(gui_available() ? "framebuffer" : "VGA text"); putc('\n');
+    print("Mouse:      "); print(mouse_available() ? "PS/2 ready" : "not available"); putc('\n');
     print("Hostname:   "); print(hostname); putc('\n');
     print("Username:   "); print(username); putc('\n');
     print("Ticks:      "); print_uint(timer_ticks); putc('\n');
@@ -922,6 +966,7 @@ static void prompt(void) {
     print("> ");
     line_origin_cell = (uint16_t)(row * VGA_WIDTH + col);
     line_rendered_len = 0;
+    if (gui_console_enabled && gui_available()) gui_terminal_begin_input();
     line_editor_set_cursor();
 }
 
@@ -1160,6 +1205,7 @@ static const char* command_names[] = {
 };
 
 static void line_editor_ensure_visible(void) {
+    if (gui_console_enabled && gui_available()) return;
     /* The prompt plus a maximum-length command can span two rows.
      * Keep the cursor and the whole editable line inside VGA memory. */
     while ((uint32_t)line_origin_cell + (uint32_t)line_len + 1u >= VGA_CELLS) {
@@ -1172,6 +1218,10 @@ static void line_editor_ensure_visible(void) {
 }
 
 static void line_editor_set_cursor(void) {
+    if (gui_console_enabled && gui_available()) {
+        gui_terminal_set_cursor(cursor_pos);
+        return;
+    }
     uint32_t pos = (uint32_t)line_origin_cell + (uint32_t)cursor_pos;
     if (pos >= VGA_CELLS) pos = VGA_CELLS - 1;
     row = (int)(pos / VGA_WIDTH);
@@ -1180,6 +1230,10 @@ static void line_editor_set_cursor(void) {
 }
 
 static void redraw_line(void) {
+    if (gui_console_enabled && gui_available()) {
+        gui_terminal_edit(line, line_len, cursor_pos, color);
+        return;
+    }
     line_editor_ensure_visible();
 
     int clear_len = line_rendered_len > line_len ? line_rendered_len : line_len;
@@ -1713,7 +1767,7 @@ static void execute(const char* cmd) {
     }
     else if (streq(cmd, "version")) {
         print("MyOS v0.5 \"Terminal\"\n");
-        print("32-bit i386 | Multiboot2 | GitHub Actions\n");
+        print("32-bit i386 | Multiboot2 | Framebuffer GUI\n");
     }
     else if (streq(cmd, "clear") || streq(cmd, "cls")) {
         clear_screen();
@@ -1916,6 +1970,11 @@ void irq1_handler(void) {
     pic_eoi(1);
 }
 
+void irq12_handler(void) {
+    mouse_irq_handler();
+    pic_eoi(12);
+}
+
 /* ---------- interrupts ---------- */
 
 static void idt_set_gate(int n, uint32_t handler) {
@@ -1949,6 +2008,7 @@ static void idt_init(void) {
 
     idt_set_gate(32, (uint32_t)irq0_stub);
     idt_set_gate(33, (uint32_t)irq1_stub);
+    idt_set_gate(44, (uint32_t)irq12_stub);
 
     idtp.limit = (uint16_t)(sizeof(idt) - 1);
     idtp.base = (uint32_t)&idt[0];
@@ -1971,8 +2031,8 @@ static void pic_remap(void) {
     outb(PIC1_DATA, 0x01); io_wait();
     outb(PIC2_DATA, 0x01); io_wait();
 
-    outb(PIC1_DATA, 0xFC); /* IRQ0 + IRQ1 */
-    outb(PIC2_DATA, 0xFF);
+    outb(PIC1_DATA, 0xF8); /* IRQ0, IRQ1 and cascade IRQ2 */
+    outb(PIC2_DATA, 0xEF); /* IRQ12 (mouse) */
 }
 
 static void pic_eoi(int irq) {
@@ -2044,9 +2104,19 @@ void kernel_main(uint32_t magic, void* mb_info) {
     }
 
     parse_multiboot_info((uint32_t)mb_info);
+    renderer_init();
+    gui_init();
+    if (gui_available()) {
+        const framebuffer_info_t* fb = framebuffer_info();
+        mouse_set_bounds(fb->width, fb->height);
+    }
     idt_init();
     pic_remap();
     pit_init(100u);
+    if (gui_available()) {
+        (void)mouse_init();
+        gui_console_enabled = 1;
+    }
 
     draw_banner();
     print("Welcome to ");
@@ -2122,6 +2192,14 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     ++line_len;
                     redraw_line();
                 }
+            }
+        }
+
+        if (gui_available()) {
+            mouse_event_t mouse_event;
+            while (mouse_poll(&mouse_event)) {
+                gui_mouse_event(mouse_event.dx, mouse_event.dy, mouse_event.wheel,
+                                mouse_event.buttons);
             }
         }
 

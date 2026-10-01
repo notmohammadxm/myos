@@ -1,6 +1,6 @@
 # MyOS v0.5
 
-Text-only operating system project for 32-bit x86, booted by GRUB Multiboot2.
+32-bit x86 operating system project, booted by GRUB Multiboot2, with a graphical framebuffer desktop and PS/2 mouse support. VGA text mode remains the safe fallback when a usable framebuffer is unavailable.
 
 ## Added features
 
@@ -32,3 +32,16 @@ make run
 The `shutdown` command now uses validated ACPI S5 data when available and otherwise halts the CPU safely. Reboot uses ACPI reset, the 8042 reset path, and finally the chipset reset port as fallbacks.
 
 Everything is session-only for now; persistent filesystems and real user processes are not yet implemented.
+
+## GUI architecture
+
+The GUI is layered over the existing shell command engine instead of replacing it. The first GUI phase adds:
+
+- Multiboot2 framebuffer discovery and validation (32-bit direct RGB).
+- A small freestanding renderer for rectangles, borders, lines, and bitmap text.
+- A desktop layout with Terminal, System Info, Settings, notification, and dock surfaces.
+- PS/2 mouse initialization and IRQ12 event delivery.
+- A graphical terminal backend so the existing shell commands continue to run through the same command executor.
+- VGA text fallback when the framebuffer is not usable.
+
+The initial GUI target is a 1024x600-or-larger 32-bit direct-RGB framebuffer.

@@ -20,6 +20,7 @@ STUB_ISR(28) STUB_ISR(29) STUB_ISR(30) STUB_ISR(31)
 #undef STUB_ISR
 void irq0_stub(void) { }
 void irq1_stub(void) { }
+void irq12_stub(void) { }
 void idt_load(uint32_t address) { (void)address; }
 
 static int failures = 0;
@@ -115,6 +116,30 @@ static void test_acpi_s5_parser(void) {
     munmap(dsdt, page);
 }
 
+
+static void test_framebuffer_gui(void) {
+    const size_t page = 4096;
+    uint8_t* fb = (uint8_t*)mmap(NULL, page * 1024u, PROT_READ | PROT_WRITE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    check(fb != MAP_FAILED && (uintptr_t)fb <= 0xFFFFFFFFu);
+    if (fb == MAP_FAILED || (uintptr_t)fb > 0xFFFFFFFFu) return;
+
+    framebuffer_set_info((uint64_t)(uintptr_t)fb, 1024u * 4u, 1024u, 600u,
+                         32u, 1u, 16u, 8u, 8u, 8u, 0u, 8u);
+    check(framebuffer_available());
+    check(framebuffer_make_color(255, 0, 0) == 0x00FF0000u);
+    renderer_init();
+    gui_init();
+    check(gui_available());
+    gui_terminal_begin_input();
+    gui_terminal_edit("TEST", 4, 2, 0x0A);
+    gui_terminal_set_cursor(1);
+    gui_mouse_event(4, 3, 0, 1);
+    gui_mouse_event(0, 0, 0, 0);
+    framebuffer_set_info(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    munmap(fb, page * 1024u);
+}
+
 static void test_line_editor(void) {
     for (int i = 0; i < VGA_CELLS; ++i) unit_test_vga[i] = 0x0A20;
 
@@ -144,6 +169,7 @@ int test_main(void) {
     test_completion_prefix();
     test_acpi_s5_parser();
     test_line_editor();
+    test_framebuffer_gui();
     return failures;
 }
 

@@ -8,6 +8,19 @@ header_start:
     dd 0
     dd header_end - header_start
     dd -(0xE85250D6 + 0 + (header_end - header_start))
+
+    ; Request a 1024x768x32 framebuffer when available.
+    dw 5
+    dw 0
+    dd 20
+    dd 1024
+    dd 768
+    dd 32
+
+    ; Padding: each Multiboot2 header tag starts on an 8-byte boundary.
+    dd 0
+
+    ; Multiboot2 header end tag.
     dw 0
     dw 0
     dd 8

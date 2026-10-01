@@ -86,4 +86,13 @@ irq1_stub:
     popa
     iretd
 
+global irq12_stub
+extern irq12_handler
+irq12_stub:
+    cld
+    pusha
+    call irq12_handler
+    popa
+    iretd
+
 section .note.GNU-stack noalloc noexec nowrite progbits
