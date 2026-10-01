@@ -111,17 +111,21 @@ void renderer_line(int x0, int y0, int x1, int y1, uint32_t color) {
     }
 }
 
+void renderer_present_rect(int x, int y, int width, int height) {
+    if (!ready) return;
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f || !f->address || f->bpp != 32u) return;
+    if (!clip_rect(&x, &y, &width, &height)) return;
+
+    for (int py = y; py < y + height; ++py) {
+        const uint8_t* src = (const uint8_t*)&backbuffer[(uint32_t)py * buffer_pitch_pixels + (uint32_t)x];
+        volatile uint8_t* dst = f->address + (uint32_t)py * f->pitch + (uint32_t)x * 4u;
+        for (int px = 0; px < width * 4; ++px) dst[px] = src[px];
+    }
+}
+
 void renderer_present(void) {
     if (!ready || !dirty) return;
-    const framebuffer_info_t* f = framebuffer_info();
-    if (!f || !f->address) return;
-    uint32_t bytes_per_pixel = f->bpp / 8u;
-    if (bytes_per_pixel != 4u) return;
-
-    for (uint32_t y = 0; y < buffer_height; ++y) {
-        const uint8_t* src = (const uint8_t*)&backbuffer[y * buffer_pitch_pixels];
-        volatile uint8_t* dst = f->address + y * f->pitch;
-        for (uint32_t x = 0; x < buffer_width * 4u; ++x) dst[x] = src[x];
-    }
+    renderer_present_rect(0, 0, (int)buffer_width, (int)buffer_height);
     dirty = 0;
 }

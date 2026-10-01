@@ -33,6 +33,8 @@ static uint8_t term_attr[TERM_ROWS][TERM_COLS];
 static int tx, ty;
 static int input_x, input_y, input_rendered_len;
 static int input_active;
+static int selection_anchor = -1;
+static int selection_cursor = 0;
 static int mouse_x_pos;
 static int mouse_y_pos;
 static uint8_t mouse_prev_buttons;
@@ -48,6 +50,9 @@ static int term_view_top;
 static int term_view_rows;
 static int cursor_request_pending;
 static int cursor_request_pos;
+static int cursor_drawn_x;
+static int cursor_drawn_y;
+static int cursor_drawn_valid;
 static gui_action_t action_queue[4];
 static int action_head;
 static int action_tail;
@@ -384,9 +389,15 @@ static void draw_terminal_surface(const struct gui_window* w) {
         if (source_row < 0 || source_row >= TERM_ROWS) continue;
         for (int c = 0; c < cols; ++c) {
             char ch = term[source_row][c];
+            int selected = 0;
+            if (source_row == input_y && selection_anchor >= 0 && selection_anchor != selection_cursor) {
+                int a = selection_anchor, b = selection_cursor;
+                if (a > b) { int t = a; a = b; b = t; }
+                selected = c >= input_x + a && c < input_x + b;
+            }
+            if (selected) renderer_rect(inner_x + c * FONT_W, inner_y + r * FONT_H, FONT_W, FONT_H, accent);
             if (ch == ' ') continue;
-            draw_char(inner_x + c * FONT_W, inner_y + r * FONT_H,
-                      ch, attr_color(term_attr[source_row][c]));
+            draw_char(inner_x + c * FONT_W, inner_y + r * FONT_H, ch, selected ? terminal_bg : attr_color(term_attr[source_row][c]));
         }
     }
 
@@ -504,15 +515,28 @@ static void draw_power_menu(void) {
     draw_text(x + 127, y + 54, "SHUTDOWN", danger);
 }
 
-static void draw_cursor(void) {
+static void draw_cursor_framebuffer(int x, int y) {
     static const uint8_t shape[17][2] = {
         {0,0},{0,1},{0,2},{0,3},{0,4},{0,5},{0,6},{0,7},{0,8},
         {1,8},{2,10},{3,12},{4,15},{5,15},{5,12},{4,10},{3,8}
     };
     for (unsigned i = 0; i < sizeof(shape)/sizeof(shape[0]); ++i)
-        renderer_pixel(mouse_x_pos + shape[i][0] + 1, mouse_y_pos + shape[i][1] + 1, bg);
+        framebuffer_pixel(x + shape[i][0] + 1, y + shape[i][1] + 1, bg);
     for (unsigned i = 0; i < sizeof(shape)/sizeof(shape[0]); ++i)
-        renderer_pixel(mouse_x_pos + shape[i][0], mouse_y_pos + shape[i][1], text);
+        framebuffer_pixel(x + shape[i][0], y + shape[i][1], text);
+}
+
+static void update_cursor_overlay(void) {
+    const int cursor_w = 7;
+    const int cursor_h = 17;
+    if (cursor_drawn_valid &&
+        (cursor_drawn_x != mouse_x_pos || cursor_drawn_y != mouse_y_pos)) {
+        renderer_present_rect(cursor_drawn_x, cursor_drawn_y, cursor_w, cursor_h);
+    }
+    draw_cursor_framebuffer(mouse_x_pos, mouse_y_pos);
+    cursor_drawn_x = mouse_x_pos;
+    cursor_drawn_y = mouse_y_pos;
+    cursor_drawn_valid = 1;
 }
 
 static int title_control_at(const struct gui_window* w) {
@@ -575,6 +599,8 @@ void gui_init(void) {
     tx = ty = 0;
     input_x = input_y = input_rendered_len = 0;
     input_active = 0;
+    selection_anchor = -1;
+    selection_cursor = 0;
     term_view_top = 0;
     term_view_rows = 1;
     mouse_x_pos = (int)framebuffer_info()->width / 2;
@@ -588,6 +614,8 @@ void gui_init(void) {
     calc_has_value = 0;
     action_head = action_tail = 0;
     cursor_request_pending = 0;
+    cursor_drawn_x = cursor_drawn_y = 0;
+    cursor_drawn_valid = 0;
     gui_request_redraw();
 }
 
@@ -609,6 +637,8 @@ void gui_terminal_clear(void) {
     tx = ty = 0;
     input_x = input_y = input_rendered_len = 0;
     input_active = 0;
+    selection_anchor = -1;
+    selection_cursor = 0;
     term_view_top = 0;
     gui_request_redraw();
 }
@@ -619,6 +649,8 @@ void gui_terminal_begin_input(void) {
     input_y = ty;
     input_rendered_len = 0;
     input_active = 1;
+    selection_anchor = -1;
+    selection_cursor = 0;
     terminal_follow_bottom();
     gui_request_redraw();
 }
@@ -644,6 +676,7 @@ void gui_terminal_edit(const char* text_in, int len, int cursor_pos, uint8_t she
     if (input_rendered_len < 0) input_rendered_len = 0;
     tx = input_x + cursor_pos;
     ty = input_y;
+    selection_cursor = cursor_pos;
     terminal_follow_bottom();
     gui_request_redraw();
 }
@@ -654,6 +687,7 @@ void gui_terminal_set_cursor(int cursor_pos) {
     if (cursor_pos > input_rendered_len) cursor_pos = input_rendered_len;
     tx = input_x + cursor_pos;
     ty = input_y;
+    selection_cursor = cursor_pos;
     gui_request_redraw();
 }
 
@@ -729,13 +763,16 @@ void gui_redraw(void) {
 
     draw_notification();
     draw_power_menu();
-    draw_cursor();
 }
 
 void gui_present(void) {
     if (!ready) return;
-    if (dirty) gui_redraw();
-    renderer_present();
+    if (dirty) {
+        gui_redraw();
+        renderer_present();
+        cursor_drawn_valid = 0;
+    }
+    update_cursor_overlay();
 }
 
 static void handle_title_action(int index, int control) {
@@ -752,6 +789,27 @@ static void handle_title_action(int index, int control) {
         w->dragging = 0;
         if (focused_window == index) focused_window = -1;
     }
+}
+
+void gui_terminal_set_selection(int anchor, int cursor_pos) {
+    if (!ready || !input_active) return;
+    if (cursor_pos < 0) cursor_pos = 0;
+    if (cursor_pos > input_rendered_len) cursor_pos = input_rendered_len;
+    if (anchor >= 0) {
+        if (anchor > input_rendered_len) anchor = input_rendered_len;
+        selection_anchor = anchor;
+    } else {
+        selection_anchor = -1;
+    }
+    selection_cursor = cursor_pos;
+    gui_request_redraw();
+}
+
+void gui_terminal_scroll(int rows) {
+    if (!ready) return;
+    int max_top = max_int(0, TERM_ROWS - term_view_rows);
+    term_view_top = max_int(0, min_int(term_view_top + rows, max_top));
+    gui_request_redraw();
 }
 
 static void terminal_mouse_click(void) {
@@ -771,6 +829,10 @@ static void terminal_mouse_click(void) {
         cursor_request_pending = 1;
     }
     input_active = 1;
+    selection_anchor = -1;
+    selection_cursor = col - input_x;
+    if (selection_cursor < 0) selection_cursor = 0;
+    if (selection_cursor > input_rendered_len) selection_cursor = input_rendered_len;
 }
 
 void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
@@ -778,14 +840,16 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     const framebuffer_info_t* f = framebuffer_info();
 
     mouse_x_pos += dx;
-    mouse_y_pos += dy; /* screen coordinates: positive packet Y moves downward */
+    mouse_y_pos += dy; /* mouse driver normalizes PS/2 Y to screen coordinates */
     mouse_x_pos = max_int(0, min_int(mouse_x_pos, (int)f->width - 1));
     mouse_y_pos = max_int(0, min_int(mouse_y_pos, (int)f->height - 1));
 
+    int old_dock_hot = dock_hot;
     dock_hot = -1;
     for (int i = 0; i < 5; ++i) {
         if (point_in_dock(i)) { dock_hot = i; break; }
     }
+    if (dock_hot != old_dock_hot) gui_request_redraw();
 
     if (wheel != 0 && inside_window(&windows[0], mouse_x_pos, mouse_y_pos)) {
         int delta = wheel > 0 ? -3 : 3;
@@ -884,7 +948,6 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     }
 
     mouse_prev_buttons = new_buttons;
-    gui_request_redraw();
 }
 
 int gui_take_terminal_cursor(int* cursor_pos) {

@@ -71,3 +71,23 @@ The GUI remains layered over the existing command engine; existing commands are 
 ## GUI Phase 4
 
 The GUI now includes a dedicated Calculator window, a five-item dock, application focus/z-order integration, and clickable calculator controls. The original shell calculator remains available unchanged.
+
+## GUI Phase 5
+
+- Terminal keyboard navigation now supports Home/End and PageUp/PageDown.
+- Shift+Left/Right selects text in the active command line; Delete/Backspace and normal typing replace the selection.
+- Ctrl+L clears the terminal through the existing shell/GUI path.
+- GUI terminal selection is rendered visibly without changing the existing shell parser.
+- Existing mouse focus, command history, completion, calculator, settings, notifications, reboot and shutdown paths remain intact.
+
+
+## Phase 6 mouse/input improvements
+
+- Corrected PS/2 Y-axis conversion: physical mouse-up now moves the screen cursor up.
+- Added optional PS/2 sample-rate/resolution tuning (200 Hz, 4 counts/mm); unsupported optional commands are non-fatal.
+- Increased the mouse event queue to 64 entries.
+- Mouse cursor is now rendered as a framebuffer overlay instead of forcing a full GUI redraw for every motion packet.
+- Added partial renderer presentation for restoring only the old cursor rectangle.
+- Mouse button transitions remain processed individually so fast clicks are not lost.
+
+Full ISO/QEMU boot testing still requires NASM, GRUB and QEMU, which are not installed in the build environment used for this phase.

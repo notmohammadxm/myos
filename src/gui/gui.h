@@ -20,6 +20,8 @@ void gui_terminal_clear(void);
 void gui_terminal_begin_input(void);
 void gui_terminal_edit(const char* text, int len, int cursor_pos, uint8_t shell_color);
 void gui_terminal_set_cursor(int cursor_pos);
+void gui_terminal_set_selection(int anchor, int cursor_pos);
+void gui_terminal_scroll(int rows);
 void gui_terminal_putchar(char c, uint8_t shell_color);
 void gui_redraw(void);
 void gui_present(void);

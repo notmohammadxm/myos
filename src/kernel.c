@@ -44,6 +44,13 @@ static volatile uint16_t unit_test_vga[VGA_CELLS];
 #define KEY_LEFT        0x82
 #define KEY_RIGHT       0x83
 #define KEY_DELETE      0x84
+#define KEY_HOME        0x85
+#define KEY_END         0x86
+#define KEY_PAGEUP      0x87
+#define KEY_PAGEDOWN    0x88
+#define KEY_SHIFT_LEFT  0x89
+#define KEY_SHIFT_RIGHT 0x8A
+#define KEY_CTRL_L      0x8B
 
 static volatile uint16_t* const vga = (volatile uint16_t*)VGA_MEMORY;
 static int row = 0;
@@ -59,12 +66,14 @@ static volatile uint16_t kbd_tail = 0;
 
 static volatile uint32_t timer_ticks = 0;
 static volatile uint8_t shift_down = 0;
+static volatile uint8_t ctrl_down = 0;
 static volatile uint8_t caps_lock = 0;
 static volatile uint8_t extended_scancode = 0;
 
 static char line[LINE_MAX];
 static int line_len = 0;
 static int cursor_pos = 0;
+static int selection_anchor = -1;
 
 static char history[HISTORY_COUNT][LINE_MAX];
 static int history_count = 0;
@@ -1220,6 +1229,7 @@ static void line_editor_ensure_visible(void) {
 static void line_editor_set_cursor(void) {
     if (gui_console_enabled && gui_available()) {
         gui_terminal_set_cursor(cursor_pos);
+        gui_terminal_set_selection(selection_anchor, cursor_pos);
         return;
     }
     uint32_t pos = (uint32_t)line_origin_cell + (uint32_t)cursor_pos;
@@ -1257,6 +1267,7 @@ static void set_line(const char* text) {
     str_copy(line, text, LINE_MAX);
     line_len = (int)str_len(line);
     cursor_pos = line_len;
+    selection_anchor = -1;
     redraw_line();
 }
 
@@ -1936,8 +1947,12 @@ void irq1_handler(void) {
             uint8_t code = sc & 0x7Fu;
             if (code == 0x48) kbd_push(KEY_UP);
             else if (code == 0x50) kbd_push(KEY_DOWN);
-            else if (code == 0x4B) kbd_push(KEY_LEFT);
-            else if (code == 0x4D) kbd_push(KEY_RIGHT);
+            else if (code == 0x4B) kbd_push(shift_down ? KEY_SHIFT_LEFT : KEY_LEFT);
+            else if (code == 0x4D) kbd_push(shift_down ? KEY_SHIFT_RIGHT : KEY_RIGHT);
+            else if (code == 0x47) kbd_push(KEY_HOME);
+            else if (code == 0x4F) kbd_push(KEY_END);
+            else if (code == 0x49) kbd_push(KEY_PAGEUP);
+            else if (code == 0x51) kbd_push(KEY_PAGEDOWN);
             else if (code == 0x53) kbd_push(KEY_DELETE);
         }
         pic_eoi(1);
@@ -1953,6 +1968,12 @@ void irq1_handler(void) {
         return;
     }
 
+    if (code == 0x1D) {
+        ctrl_down = (uint8_t)!released;
+        pic_eoi(1);
+        return;
+    }
+
     if (released) {
         pic_eoi(1);
         return;
@@ -1960,6 +1981,12 @@ void irq1_handler(void) {
 
     if (code == 0x3A) {
         caps_lock = (uint8_t)!caps_lock;
+        pic_eoi(1);
+        return;
+    }
+
+    if (ctrl_down && code == 0x26) {
+        kbd_push(KEY_CTRL_L);
         pic_eoi(1);
         return;
     }
@@ -2147,21 +2174,60 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     history_cursor = history_count;
                     set_line("");
                 }
+            } else if (event == KEY_HOME || event == KEY_END || event == KEY_PAGEUP || event == KEY_PAGEDOWN) {
+                if (event == KEY_HOME) cursor_pos = 0;
+                else if (event == KEY_END) cursor_pos = line_len;
+                else if (event == KEY_PAGEUP) {
+                    gui_terminal_scroll(-6);
+                    continue;
+                } else {
+                    gui_terminal_scroll(6);
+                    continue;
+                }
+                selection_anchor = -1;
+                line_editor_set_cursor();
+            } else if (event == KEY_SHIFT_LEFT || event == KEY_SHIFT_RIGHT) {
+                if (selection_anchor < 0) selection_anchor = cursor_pos;
+                if (event == KEY_SHIFT_LEFT && cursor_pos > 0) --cursor_pos;
+                if (event == KEY_SHIFT_RIGHT && cursor_pos < line_len) ++cursor_pos;
+                line_editor_set_cursor();
             } else if (event == KEY_LEFT) {
-                if (cursor_pos > 0) {
+                if (selection_anchor >= 0 && selection_anchor != cursor_pos) {
+                    cursor_pos = selection_anchor < cursor_pos ? selection_anchor : cursor_pos;
+                    selection_anchor = -1;
+                } else if (cursor_pos > 0) {
                     --cursor_pos;
-                    line_editor_set_cursor();
                 }
+                line_editor_set_cursor();
             } else if (event == KEY_RIGHT) {
-                if (cursor_pos < line_len) {
+                if (selection_anchor >= 0 && selection_anchor != cursor_pos) {
+                    cursor_pos = selection_anchor > cursor_pos ? selection_anchor : cursor_pos;
+                    selection_anchor = -1;
+                } else if (cursor_pos < line_len) {
                     ++cursor_pos;
-                    line_editor_set_cursor();
                 }
-            } else if (event == KEY_DELETE) {
-                if (cursor_pos < line_len) {
+                line_editor_set_cursor();
+            } else if (event == KEY_DELETE || event == '\b') {
+                int sel_a = selection_anchor;
+                int sel_b = cursor_pos;
+                if (sel_a >= 0 && sel_a != sel_b) {
+                    if (sel_a > sel_b) { int t = sel_a; sel_a = sel_b; sel_b = t; }
+                    for (int i = sel_a; i < line_len - (sel_b - sel_a); ++i)
+                        line[i] = line[i + (sel_b - sel_a)];
+                    line_len -= sel_b - sel_a;
+                    cursor_pos = sel_a;
+                    selection_anchor = -1;
+                    redraw_line();
+                } else if (event == KEY_DELETE && cursor_pos < line_len) {
                     for (int i = cursor_pos; i < line_len - 1; ++i)
                         line[i] = line[i + 1];
                     --line_len;
+                    redraw_line();
+                } else if (event == '\b' && cursor_pos > 0) {
+                    for (int i = cursor_pos - 1; i < line_len - 1; ++i)
+                        line[i] = line[i + 1];
+                    --line_len;
+                    --cursor_pos;
                     redraw_line();
                 }
             } else if (event == '\n') {
@@ -2172,23 +2238,27 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 execute(line);
                 line_len = 0;
                 cursor_pos = 0;
+                selection_anchor = -1;
                 line[0] = 0;
                 line_rendered_len = 0;
                 prompt();
-            } else if (event == '\b') {
-                if (cursor_pos > 0) {
-                    for (int i = cursor_pos - 1; i < line_len - 1; ++i)
-                        line[i] = line[i + 1];
-                    --line_len;
-                    --cursor_pos;
-                    redraw_line();
-                }
+            } else if (event == KEY_CTRL_L) {
+                gui_terminal_clear();
+                clear_screen();
+                prompt();
             } else if (event == '\t') {
                 cmd_complete();
             } else if (event >= 32 && event < 127) {
+                if (selection_anchor >= 0 && selection_anchor != cursor_pos) {
+                    int a = selection_anchor, b = cursor_pos;
+                    if (a > b) { int t = a; a = b; b = t; }
+                    for (int i = a; i < line_len - (b - a); ++i) line[i] = line[i + (b - a)];
+                    line_len -= b - a;
+                    cursor_pos = a;
+                    selection_anchor = -1;
+                }
                 if (line_len < LINE_MAX - 1) {
-                    for (int i = line_len; i > cursor_pos; --i)
-                        line[i] = line[i - 1];
+                    for (int i = line_len; i > cursor_pos; --i) line[i] = line[i - 1];
                     line[cursor_pos++] = (char)event;
                     ++line_len;
                     redraw_line();
@@ -2199,6 +2269,8 @@ void kernel_main(uint32_t magic, void* mb_info) {
         if (gui_available()) {
             mouse_event_t mouse_event;
             while (mouse_poll(&mouse_event)) {
+                /* Keep every button transition so a fast click cannot be
+                 * collapsed away. Rendering is already deferred to gui_present(). */
                 gui_mouse_event(mouse_event.dx, mouse_event.dy, mouse_event.wheel,
                                 mouse_event.buttons);
             }

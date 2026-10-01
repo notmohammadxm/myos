@@ -2,7 +2,7 @@
 
 #define KBD_STATUS 0x64
 #define KBD_DATA   0x60
-#define MOUSE_IRQ_BUFFER 32
+#define MOUSE_IRQ_BUFFER 64
 
 static volatile uint8_t packet_bytes[4];
 static volatile uint8_t packet_index;
@@ -58,6 +58,12 @@ static int aux_read(uint8_t* out) {
     *out = inb(KBD_DATA);
     return 1;
 }
+static int aux_command(uint8_t command, uint8_t value) {
+    uint8_t ack = 0;
+    if (!aux_write(command) || !aux_read(&ack) || ack != 0xFAu) return 0;
+    if (!aux_write(value) || !aux_read(&ack) || ack != 0xFAu) return 0;
+    return 1;
+}
 static void queue_event(int32_t dx, int32_t dy, int32_t wheel, uint8_t new_buttons) {
     uint8_t next = (uint8_t)((head + 1u) % MOUSE_IRQ_BUFFER);
     if (next == tail) return;
@@ -99,6 +105,11 @@ int mouse_init(void) {
     outb(KBD_STATUS, 0x60);
     wait_input_clear();
     outb(KBD_DATA, config);
+
+    /* Prefer a stable standard PS/2 motion profile. Some old devices do not
+     * implement these optional commands, so failure here is non-fatal. */
+    (void)aux_command(0xF3u, 200u); /* sample rate */
+    (void)aux_command(0xE8u, 2u);   /* resolution */
 
     if (!aux_write(0xF4)) return 0; /* enable streaming */
     uint8_t ack = 0;
@@ -143,6 +154,7 @@ void mouse_irq_handler(void) {
 
     if (packet_bytes[0] & 0xC0u) return; /* overflow: discard packet */
     int32_t dx = (int8_t)packet_bytes[1];
-    int32_t dy = (int8_t)packet_bytes[2];
+    int32_t dy = -(int32_t)(int8_t)packet_bytes[2];
+    /* Convert PS/2 +Y (physical up) to screen +Y (down). */
     queue_event(dx, dy, 0, packet_bytes[0] & 0x07u);
 }
