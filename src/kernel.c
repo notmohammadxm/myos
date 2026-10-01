@@ -2201,6 +2201,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 gui_mouse_event(mouse_event.dx, mouse_event.dy, mouse_event.wheel,
                                 mouse_event.buttons);
             }
+            gui_present();
         }
 
         cpu_halt();

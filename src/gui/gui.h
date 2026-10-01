@@ -12,6 +12,7 @@ void gui_terminal_edit(const char* text, int len, int cursor_pos, uint8_t shell_
 void gui_terminal_set_cursor(int cursor_pos);
 void gui_terminal_putchar(char c, uint8_t shell_color);
 void gui_redraw(void);
+void gui_present(void);
 void gui_mouse_event(int dx, int dy, int wheel, uint8_t buttons);
 
 #endif

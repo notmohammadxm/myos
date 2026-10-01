@@ -134,8 +134,11 @@ static void test_framebuffer_gui(void) {
     gui_terminal_begin_input();
     gui_terminal_edit("TEST", 4, 2, 0x0A);
     gui_terminal_set_cursor(1);
+    gui_present();
+    check(*(uint32_t*)fb != 0u || ((uint32_t*)fb)[1] != 0u);
     gui_mouse_event(4, 3, 0, 1);
     gui_mouse_event(0, 0, 0, 0);
+    gui_present();
     framebuffer_set_info(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     munmap(fb, page * 1024u);
 }

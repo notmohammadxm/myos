@@ -1,26 +1,19 @@
-# MyOS v0.5
+# MyOS v0.5 — GUI development branch
 
-32-bit x86 operating system project, booted by GRUB Multiboot2, with a graphical framebuffer desktop and PS/2 mouse support. VGA text mode remains the safe fallback when a usable framebuffer is unavailable.
+MyOS is a 32-bit i386 / Multiboot2 operating-system project. The project keeps the existing command shell and adds a graphical desktop layer above it.
 
-## Added features
+## Current capabilities
 
-- Calculator: `calc (12+8)*3^2-5`
-- Themes: `theme matrix`, `theme ice`, `theme amber`, `theme mono`
-- Command history: Up/Down arrows and `history`
-- Tab completion
-- User profile: `profile`, `whoami`, `hostname`
-- System info: `sysinfo`, `mem`
-- RTC date/time: `time`, `date`, `clock`, `calendar`
-- Task manager: `taskmgr`
-- Help center: `help`, `help shell`, `help system`, `help network`
-- Settings: `settings`, `set username=NAME`, `set hostname=NAME`
-- Notifications: `notify MESSAGE`, `notifications`
-- Logs: `logs`
-- Network tools: `net`, `ping HOST` (PCI NIC discovery is available; full TCP/IP is not yet implemented)
+- Existing shell commands and line editing remain available.
+- Calculator, themes, command history, completion, profile, system info, RTC tools, task manager, settings, notifications, logs and network-status commands remain in the kernel.
+- Multiboot2 framebuffer detection.
+- Software renderer with a bounded backbuffer to prevent visible full-screen redraw flicker.
+- Graphical desktop chrome, windows, dock, notification panel and mouse cursor.
+- PS/2 mouse input with IRQ12 and drag support.
+- Graphical Terminal surface driven by the same shell output/input path.
+- GUI fallback to VGA text mode when a supported framebuffer is unavailable.
 
 ## Build
-
-Run the host-side regression tests first, then build and verify the Multiboot2 kernel.
 
 ```bash
 make test
@@ -29,19 +22,33 @@ make verify
 make run
 ```
 
-The `shutdown` command now uses validated ACPI S5 data when available and otherwise halts the CPU safely. Reboot uses ACPI reset, the 8042 reset path, and finally the chipset reset port as fallbacks.
-
-Everything is session-only for now; persistent filesystems and real user processes are not yet implemented.
+`make test` runs host regression tests. `make` builds the ISO. `make verify` validates the resulting kernel as Multiboot2.
 
 ## GUI architecture
 
-The GUI is layered over the existing shell command engine instead of replacing it. The first GUI phase adds:
+```text
+Kernel services
+    ├── keyboard / mouse / timer / RTC / PCI / ACPI
+    ├── shell command engine
+    └── settings / notifications / system information
+                │
+                ▼
+            GUI layer
+       ┌────────┼─────────┐
+       │        │         │
+    windows  terminal    dock
+       │        │         │
+       └────────┴─────────┘
+                │
+             renderer
+                │
+            backbuffer
+                │
+          framebuffer
+```
 
-- Multiboot2 framebuffer discovery and validation (32-bit direct RGB).
-- A small freestanding renderer for rectangles, borders, lines, and bitmap text.
-- A desktop layout with Terminal, System Info, Settings, notification, and dock surfaces.
-- PS/2 mouse initialization and IRQ12 event delivery.
-- A graphical terminal backend so the existing shell commands continue to run through the same command executor.
-- VGA text fallback when the framebuffer is not usable.
+The goal is to add GUI functionality without deleting or duplicating the existing command functionality.
 
-The initial GUI target is a 1024x600-or-larger 32-bit direct-RGB framebuffer.
+## Current limitation
+
+The GUI renderer intentionally uses a fixed static backbuffer because there is no heap allocator yet. The requested boot mode is 1024x768x32. A larger or unsupported framebuffer falls back to the text path.

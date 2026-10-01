@@ -15,9 +15,12 @@ struct gui_window {
     int x, y, w, h;
     int dragging;
     int drag_dx, drag_dy;
+    int visible;
+    int minimized;
 };
 
 static int ready;
+static int dirty;
 static const char* theme_name = "matrix";
 static uint32_t bg, panel, panel2, accent, text, muted, border, terminal_bg;
 static char term[TERM_ROWS][TERM_COLS];
@@ -30,10 +33,13 @@ static int mouse_x_pos = 512;
 static int mouse_y_pos = 384;
 static uint8_t mouse_prev_buttons;
 static int focused_window;
+static int dock_hot = -1;
+
+static void gui_request_redraw(void);
 static struct gui_window windows[3] = {
-    { 24, 104, 650, 480, 0, 0, 0 },
-    { 700, 92, 292, 240, 0, 0, 0 },
-    { 700, 356, 292, 228, 0, 0, 0 }
+    { 24, 104, 650, 480, 0, 0, 0, 1, 0 },
+    { 700, 92, 292, 240, 0, 0, 0, 1, 0 },
+    { 700, 356, 292, 228, 0, 0, 0, 1, 0 }
 };
 
 static uint8_t glyph_row(char c, int row) {
@@ -101,7 +107,7 @@ static void draw_char(int x, int y, char c, uint32_t color) {
     for (int r = 0; r < 7; ++r) {
         uint8_t bits = glyph_row(c, r);
         for (int col = 0; col < 6; ++col)
-            if (bits & (1u << (5 - col))) framebuffer_pixel(x + col, y + r, color);
+            if (bits & (1u << (5 - col))) renderer_pixel(x + col, y + r, color);
     }
 }
 
@@ -115,7 +121,7 @@ static void draw_text(int x, int y, const char* s, uint32_t color) {
 }
 
 static int inside(const struct gui_window* w, int x, int y) {
-    return x >= w->x && y >= w->y && x < w->x + w->w && y < w->y + w->h;
+    return w->visible && !w->minimized && x >= w->x && y >= w->y && x < w->x + w->w && y < w->y + w->h;
 }
 
 static void set_palette(const char* name) {
@@ -144,17 +150,19 @@ static void set_palette(const char* name) {
 }
 
 static void draw_window(const struct gui_window* w, const char* title, int index) {
+    if (!w->visible || w->minimized) return;
     uint32_t line = index == focused_window ? accent : border;
     renderer_rect(w->x, w->y, w->w, w->h, panel);
     renderer_border(w->x, w->y, w->w, w->h, 1, line);
     renderer_rect(w->x, w->y, w->w, 34, panel2);
     draw_text(w->x + 12, w->y + 12, title, text);
-    framebuffer_fill_rect(w->x + w->w - 54, w->y + 10, 5, 5, muted);
-    framebuffer_fill_rect(w->x + w->w - 41, w->y + 10, 5, 5, muted);
-    framebuffer_fill_rect(w->x + w->w - 28, w->y + 10, 5, 5, accent);
+    renderer_rect(w->x + w->w - 54, w->y + 9, 7, 7, muted);
+    renderer_rect(w->x + w->w - 40, w->y + 9, 7, 7, muted);
+    renderer_rect(w->x + w->w - 26, w->y + 9, 7, 7, accent);
 }
 
 static void draw_sysinfo(const struct gui_window* w) {
+    if (!w->visible || w->minimized) return;
     draw_text(w->x + 14, w->y + 54, "KERNEL", muted);
     draw_text(w->x + 14, w->y + 69, "I386", text);
     draw_text(w->x + 150, w->y + 54, "BOOT", muted);
@@ -170,6 +178,7 @@ static void draw_sysinfo(const struct gui_window* w) {
 }
 
 static void draw_settings(const struct gui_window* w) {
+    if (!w->visible || w->minimized) return;
     draw_text(w->x + 14, w->y + 54, "THEME", muted);
     draw_text(w->x + 14, w->y + 69, theme_name, text);
     renderer_border(w->x + 196, w->y + 51, 76, 24, 1, border);
@@ -184,12 +193,20 @@ static void draw_settings(const struct gui_window* w) {
 }
 
 static void draw_cursor(void) {
-    static const int shape[12][2] = {
-        {0,0},{0,1},{0,2},{0,3},{0,4},{0,5},{0,6},{0,7},{0,8},{1,7},{2,10},{3,11}
+    /* Small arrow cursor with a dark underlay so it remains visible on all themes. */
+    static const int shape[][2] = {
+        {0,0},{0,1},{0,2},{0,3},{0,4},{0,5},{0,6},{0,7},
+        {0,8},{1,8},{2,10},{3,12},{4,14},{5,13},{4,11},{3,9}
     };
-    for (int i = 0; i < 12; ++i) {
-        framebuffer_pixel(mouse_x_pos + shape[i][0], mouse_y_pos + shape[i][1], text);
-        if (i > 1) framebuffer_pixel(mouse_x_pos + shape[i][0] + 1, mouse_y_pos + shape[i][1], text);
+    for (unsigned i = 0; i < sizeof(shape)/sizeof(shape[0]); ++i) {
+        int px = mouse_x_pos + shape[i][0];
+        int py = mouse_y_pos + shape[i][1];
+        renderer_pixel(px + 1, py + 1, bg);
+    }
+    for (unsigned i = 0; i < sizeof(shape)/sizeof(shape[0]); ++i) {
+        int px = mouse_x_pos + shape[i][0];
+        int py = mouse_y_pos + shape[i][1];
+        renderer_pixel(px, py, text);
     }
 }
 
@@ -242,6 +259,7 @@ static void draw_desktop_chrome(void) {
 }
 
 static void draw_terminal_surface(const struct gui_window* w) {
+    if (!w->visible || w->minimized) return;
     renderer_rect(w->x + 1, w->y + 35, w->w - 2, w->h - 36, terminal_bg);
     int cols = (w->w - TERM_PAD * 2) / FONT_W;
     int rows = (w->h - 35 - TERM_PAD * 2) / FONT_H;
@@ -276,6 +294,7 @@ void gui_init(void) {
     input_active = 0;
     mouse_x_pos = (int)framebuffer_info()->width / 2;
     mouse_y_pos = (int)framebuffer_info()->height / 2;
+    gui_request_redraw();
     gui_redraw();
 }
 
@@ -284,7 +303,7 @@ int gui_available(void) { return ready != 0; }
 void gui_set_theme(const char* name) {
     if (!ready) return;
     set_palette(name);
-    gui_redraw();
+    gui_request_redraw();
 }
 
 void gui_terminal_clear(void) {
@@ -294,7 +313,7 @@ void gui_terminal_clear(void) {
     tx = ty = 0;
     input_x = input_y = input_rendered_len = 0;
     input_active = 0;
-    gui_redraw();
+    gui_request_redraw();
 }
 
 void gui_terminal_begin_input(void) {
@@ -324,12 +343,9 @@ void gui_terminal_edit(const char* text, int len, int cursor_pos, uint8_t shell_
         term_attr[input_y][x] = shell_color;
     }
     input_rendered_len = len;
-    tx = input_x + len;
-    ty = input_y;
-    gui_redraw();
     tx = input_x + cursor_pos;
     ty = input_y;
-    gui_redraw();
+    gui_request_redraw();
 }
 
 void gui_terminal_set_cursor(int cursor_pos) {
@@ -338,10 +354,11 @@ void gui_terminal_set_cursor(int cursor_pos) {
     if (cursor_pos > input_rendered_len) cursor_pos = input_rendered_len;
     tx = input_x + cursor_pos;
     ty = input_y;
-    gui_redraw();
+    gui_request_redraw();
 }
 
 static void terminal_scroll(void) {
+
     for (int r = 1; r < TERM_ROWS; ++r)
         for (int c = 0; c < TERM_COLS; ++c) { term[r-1][c] = term[r][c]; term_attr[r-1][c] = term_attr[r][c]; }
     for (int c = 0; c < TERM_COLS; ++c) { term[TERM_ROWS-1][c] = ' '; term_attr[TERM_ROWS-1][c] = 0x0A; }
@@ -350,21 +367,24 @@ static void terminal_scroll(void) {
 
 void gui_terminal_putchar(char c, uint8_t shell_color) {
     if (!ready) return;
-    if (c == '\r') { tx = 0; gui_redraw(); return; }
-    if (c == '\b') { if (tx > 0) --tx; else if (ty > 0) { --ty; tx = TERM_COLS - 1; } term[ty][tx] = ' '; gui_redraw(); return; }
+    if (c == '\r') { tx = 0; gui_request_redraw(); return; }
+    if (c == '\b') { if (tx > 0) --tx; else if (ty > 0) { --ty; tx = TERM_COLS - 1; } term[ty][tx] = ' '; gui_request_redraw(); return; }
     if (c == '\t') { int n = 4 - (tx % 4); while (n--) gui_terminal_putchar(' ', shell_color); return; }
-    if (c == '\n') { tx = 0; ++ty; if (ty >= TERM_ROWS) terminal_scroll(); gui_redraw(); return; }
+    if (c == '\n') { tx = 0; ++ty; if (ty >= TERM_ROWS) terminal_scroll(); gui_request_redraw(); return; }
     if ((unsigned char)c < 32u) return;
     if (tx >= TERM_COLS) { tx = 0; ++ty; if (ty >= TERM_ROWS) terminal_scroll(); }
     term[ty][tx] = c;
     term_attr[ty][tx] = shell_color;
     ++tx;
     if (tx >= TERM_COLS) { tx = 0; ++ty; if (ty >= TERM_ROWS) terminal_scroll(); }
-    gui_redraw();
+    gui_request_redraw();
 }
+
+void gui_request_redraw(void) { dirty = 1; }
 
 void gui_redraw(void) {
     if (!ready) return;
+    dirty = 0;
     const framebuffer_info_t* f = framebuffer_info();
     draw_desktop_chrome();
     draw_window(&windows[0], "TERMINAL", 0);
@@ -373,6 +393,22 @@ void gui_redraw(void) {
     draw_terminal_surface(&windows[0]);
     draw_sysinfo(&windows[1]);
     draw_settings(&windows[2]);
+
+    /* Compact dock: each segment is a real mouse target. */
+    const int dock_w = 360;
+    const int dock_h = 46;
+    int dock_x = ((int)f->width - dock_w) / 2;
+    int dock_y = (int)f->height - 60;
+    renderer_rect(dock_x, dock_y, dock_w, dock_h, panel2);
+    renderer_border(dock_x, dock_y, dock_w, dock_h, 1, border);
+    const char* dock_names[4] = { "TERM", "SYSTEM", "SETTINGS", "POWER" };
+    for (int i = 0; i < 4; ++i) {
+        int bx = dock_x + 8 + i * 86;
+        uint32_t c = dock_hot == i ? accent : (i == focused_window ? text : muted);
+        renderer_rect(bx, dock_y + 7, 76, 31, i == focused_window ? panel : bg);
+        renderer_border(bx, dock_y + 7, 76, 31, 1, c);
+        draw_text(bx + 17, dock_y + 19, dock_names[i], c);
+    }
     int nw = 212;
     int nx = (int)f->width - nw - 26;
     int ny = (int)f->height - 132;
@@ -381,6 +417,27 @@ void gui_redraw(void) {
     draw_text(nx + 14, ny + 11, "SYSTEM NOTIFICATION", accent);
     draw_text(nx + 14, ny + 26, "MYOS BOOT COMPLETED", text);
     draw_cursor();
+}
+
+void gui_present(void) {
+    if (!ready) return;
+    if (dirty) gui_redraw();
+    renderer_present();
+}
+
+static void handle_window_title_click(struct gui_window* w, int index) {
+    if (!w || !w->visible || w->minimized) return;
+    int rel_x = mouse_x_pos - w->x;
+    if (mouse_y_pos < w->y || mouse_y_pos >= w->y + 34) return;
+    if (rel_x >= w->w - 48 && rel_x < w->w - 24) {
+        w->minimized = 1;
+        if (focused_window == index) focused_window = -1;
+    } else if (rel_x >= w->w - 24) {
+        w->visible = 0;
+        w->minimized = 0;
+        w->dragging = 0;
+        if (focused_window == index) focused_window = -1;
+    }
 }
 
 void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
@@ -394,8 +451,25 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     if (mouse_x_pos >= (int)f->width) mouse_x_pos = (int)f->width - 1;
     if (mouse_y_pos >= (int)f->height - 67) mouse_y_pos = (int)f->height - 68;
 
+    const int dock_w = 360;
+    const int dock_h = 46;
+    int dock_x = ((int)f->width - dock_w) / 2;
+    int dock_y = (int)f->height - 60;
+    dock_hot = -1;
+    if (mouse_x_pos >= dock_x + 8 && mouse_x_pos < dock_x + dock_w - 8 &&
+        mouse_y_pos >= dock_y + 7 && mouse_y_pos < dock_y + 7 + dock_h - 14) {
+        dock_hot = (mouse_x_pos - (dock_x + 8)) / 86;
+        if (dock_hot > 3) dock_hot = -1;
+    }
+
     uint8_t pressed = (uint8_t)((new_buttons ^ mouse_prev_buttons) & new_buttons);
-    if (pressed & 1u) {
+    if (pressed & 1u && dock_hot >= 0) {
+        if (dock_hot == 0) { windows[0].visible = 1; windows[0].minimized = 0; focused_window = 0; }
+        else if (dock_hot == 1) { windows[1].visible = 1; windows[1].minimized = 0; focused_window = 1; }
+        else if (dock_hot == 2) { windows[2].visible = 1; windows[2].minimized = 0; focused_window = 2; }
+        else if (dock_hot == 3) { /* Actual power remains exposed through the stable shell path. */ }
+    }
+    if (pressed & 1u && dock_hot < 0) {
         focused_window = -1;
         for (int i = 2; i >= 0; --i) {
             if (inside(&windows[i], mouse_x_pos, mouse_y_pos)) { focused_window = i; break; }
@@ -403,9 +477,17 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
         if (focused_window >= 0) {
             struct gui_window* w = &windows[focused_window];
             if (mouse_y_pos < w->y + 34) {
-                w->dragging = 1;
-                w->drag_dx = mouse_x_pos - w->x;
-                w->drag_dy = mouse_y_pos - w->y;
+                int before_visible = w->visible;
+                int before_minimized = w->minimized;
+                handle_window_title_click(w, focused_window);
+                if (w->visible == before_visible && w->minimized == before_minimized &&
+                    mouse_x_pos < w->x + w->w - 48) {
+                    w->dragging = 1;
+                    w->drag_dx = mouse_x_pos - w->x;
+                    w->drag_dy = mouse_y_pos - w->y;
+                }
+            } else if (focused_window == 0) {
+                input_active = 1;
             }
         }
     }
@@ -419,5 +501,5 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
         if (w->y < 54) w->y = 54;
     }
     mouse_prev_buttons = new_buttons;
-    gui_redraw();
+    gui_request_redraw();
 }
