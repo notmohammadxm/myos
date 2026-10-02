@@ -342,6 +342,8 @@ static void layout_windows(void) {
                        TOPBAR_H + 100, 390, 410);
 
     for (int i = 0; i < WINDOW_COUNT; ++i) {
+        windows[i].visible = (i < 3) ? 1 : 0;
+        windows[i].minimized = 0;
         windows[i].dragging = 0;
         windows[i].resizing = 0;
         windows[i].resize_edges = 0;
@@ -1680,8 +1682,7 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                                     (uint32_t)(runtime_ticks - last_title_click_tick) <= TITLE_DOUBLE_CLICK_TICKS;
                     last_title_click_window = is_double ? -1 : hit;
                     last_title_click_tick = runtime_ticks;
-                    if (is_double && control == 0) toggle_maximize(w);
-                    else handle_title_action(hit, control);
+                    handle_title_action(hit, control);
                 } else if (w->maximized == 0 && mouse_y_pos < w->y + TITLE_H) {
                     if (last_title_click_window == hit &&
                         (uint32_t)(runtime_ticks - last_title_click_tick) <= TITLE_DOUBLE_CLICK_TICKS) {
@@ -1743,11 +1744,13 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
             w->target_y = mouse_y_pos - w->drag_dy;
             clamp_target(w);
             w->maximized = 0;
-            window_set_target(w, w->target_x, w->target_y, w->target_w, w->target_h);
-            if (!animations_enabled) {
-                w->x = w->target_x;
-                w->y = w->target_y;
-            }
+            w->snap_state = 0;
+            w->x = w->target_x;
+            w->y = w->target_y;
+            w->restore_x = w->x;
+            w->restore_y = w->y;
+            w->restore_w = w->w;
+            w->restore_h = w->h;
             window_transition_rect(w, old_x, old_y, w->w, w->h);
         } else if (mouse_capture_mode == 2 && w->resizing) {
             int left = w->target_x;
@@ -1767,6 +1770,11 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                 else bottom = top + MIN_WINDOW_H;
             }
             window_set_target(w, left, top, right - left, bottom - top);
+            w->x = w->target_x;
+            w->y = w->target_y;
+            w->w = w->target_w;
+            w->h = w->target_h;
+            save_restore_geometry(w);
             window_transition_rect(w, w->x, w->y, w->w, w->h);
         }
     }
