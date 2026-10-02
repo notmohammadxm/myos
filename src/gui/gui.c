@@ -413,6 +413,10 @@ static void draw_icon_power(int x, int y, uint32_t c) {
     renderer_line(x + 20, y + 9, x + 18, y + 6, c);
 }
 
+static uint32_t control_color(const struct gui_window* w, int control);
+static void draw_control_button(const struct gui_window* w, int center_x, int control, uint32_t color);
+static void draw_resize_grip(const struct gui_window* w, uint32_t color);
+
 static void draw_round_rect(int x, int y, int width, int height, int radius, uint32_t color) {
     if (width <= 0 || height <= 0) return;
     if (radius <= 0) { renderer_rect(x, y, width, height, color); return; }
@@ -494,13 +498,6 @@ static void draw_control_button(const struct gui_window* w, int center_x, int co
         renderer_line(center_x - 4, cy - 4, center_x + 4, cy + 4, color);
         renderer_line(center_x + 4, cy - 4, center_x - 4, cy + 4, color);
     }
-}
-
-static void draw_window_controls(const struct gui_window* w) {
-    if (w->w < 150 || w->h < TITLE_H) return;
-    draw_control_button(w, w->x + w->w - 82, 1, control_color(w, 1));
-    draw_control_button(w, w->x + w->w - 52, 2, control_color(w, 2));
-    draw_control_button(w, w->x + w->w - 22, 3, control_color(w, 3));
 }
 
 static void draw_resize_grip(const struct gui_window* w, uint32_t color) {
