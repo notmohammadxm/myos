@@ -51,6 +51,7 @@ static volatile uint16_t unit_test_vga[VGA_CELLS];
 #define KEY_SHIFT_LEFT  0x89
 #define KEY_SHIFT_RIGHT 0x8A
 #define KEY_CTRL_L      0x8B
+#define KEY_ESCAPE      0x8C
 
 static volatile uint16_t* const vga = (volatile uint16_t*)VGA_MEMORY;
 static int row = 0;
@@ -472,7 +473,8 @@ static const struct theme_def themes[] = {
     { "matrix", 0x0A, 0x00 },
     { "ice",    0x0B, 0x01 },
     { "amber",  0x0E, 0x00 },
-    { "mono",   0x0F, 0x00 }
+    { "mono",   0x0F, 0x00 },
+    { "light",  0x00, 0x0F }
 };
 
 static void apply_theme(const struct theme_def* t) {
@@ -490,7 +492,7 @@ static void cmd_theme(const char* arg) {
     if (!*arg) {
         print("Current theme: ");
         print(current_theme);
-        print("\nAvailable themes: matrix ice amber mono\n");
+        print("\nAvailable themes: matrix ice amber mono light\n");
         return;
     }
 
@@ -503,7 +505,7 @@ static void cmd_theme(const char* arg) {
         }
     }
 
-    print("Unknown theme. Use: matrix, ice, amber, mono\n");
+    print("Unknown theme. Use: matrix, ice, amber, mono, light\n");
 }
 
 /* ---------- RTC ---------- */
@@ -1991,6 +1993,12 @@ void irq1_handler(void) {
         return;
     }
 
+    if (code == 0x01) {
+        kbd_push(KEY_ESCAPE);
+        pic_eoi(1);
+        return;
+    }
+
     char c = kbd_translate(code);
     if (c) kbd_push((uint8_t)c);
 
@@ -2170,6 +2178,10 @@ void kernel_main(uint32_t magic, void* mb_info) {
         int event;
         int keyboard_budget = 32;
         while (keyboard_budget-- > 0 && (event = kbd_get_event()) >= 0) {
+            if (gui_console_enabled && gui_available() &&
+                gui_keyboard_event(event, ctrl_down, shift_down)) {
+                continue;
+            }
             if (event == KEY_UP) {
                 if (history_count > 0 && history_cursor > 0) {
                     --history_cursor;
@@ -2262,9 +2274,6 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     gui_open_window(event - '1');
                     continue;
                 }
-            } else if (gui_console_enabled && gui_available() &&
-                       gui_keyboard_event(event, ctrl_down, shift_down)) {
-                continue;
             } else if (event >= 32 && event < 127) {
                 if (selection_anchor >= 0 && selection_anchor != cursor_pos) {
                     int a = selection_anchor, b = cursor_pos;
@@ -2316,7 +2325,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 if (action.type == GUI_ACTION_REBOOT) execute("reboot");
                 else if (action.type == GUI_ACTION_SHUTDOWN) execute("shutdown");
                 else if (action.type == GUI_ACTION_THEME) {
-                    static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono" };
+                    static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono", "light" };
                     int next_theme = 0;
                     for (size_t i = 0; i < sizeof(gui_theme_names) / sizeof(gui_theme_names[0]); ++i) {
                         if (streq(current_theme, gui_theme_names[i])) {
