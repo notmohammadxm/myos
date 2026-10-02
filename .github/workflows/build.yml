@@ -2,7 +2,7 @@ name: Build MyOS ISO
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, phase-9-window-manager-2 ]
   workflow_dispatch:
 
 permissions:
