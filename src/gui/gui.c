@@ -89,6 +89,7 @@ static int launcher_open;
 static int launcher_selected;
 static int launcher_query_len;
 static char launcher_query[32];
+static int recent_apps[5] = { 0, 1, 2, 3, 4 };
 static int quick_settings_open;
 static int notification_open = 1;
 static int notifications_enabled = 1;
@@ -1600,6 +1601,7 @@ void gui_init(void) {
     launcher_selected = 0;
     launcher_query_len = 0;
     launcher_query[0] = 0;
+    for (int i = 0; i < 5; ++i) recent_apps[i] = i;
     quick_settings_open = 0;
     notification_open = 1;
     notifications_cleared = 0;
