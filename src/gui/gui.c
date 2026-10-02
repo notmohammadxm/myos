@@ -787,31 +787,111 @@ static void draw_desktop_chrome(void) {
     } else draw_text(w - 116, h - 43, "DESKTOP", text);
 }
 
+static int gui_ascii_lower(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A' + 'a';
+    return c;
+}
+
+static int launcher_contains(const char* text_in, const char* query) {
+    if (!query || !query[0]) return 1;
+    if (!text_in) return 0;
+    for (int i = 0; text_in[i]; ++i) {
+        int j = 0;
+        while (query[j] && text_in[i + j] &&
+               gui_ascii_lower(text_in[i + j]) == gui_ascii_lower(query[j])) ++j;
+        if (!query[j]) return 1;
+    }
+    return 0;
+}
+
+static int launcher_match_count(void) {
+    const char* names[5] = {
+        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR"
+    };
+    const char* desc[5] = {
+        "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
+        "FAST INTEGER MATH", "LIVE RUNTIME STATUS"
+    };
+    int count = 0;
+    for (int i = 0; i < 5; ++i)
+        if (launcher_contains(names[i], launcher_query) ||
+            launcher_contains(desc[i], launcher_query)) ++count;
+    return count;
+}
+
+static int launcher_match_at(int ordinal) {
+    const char* names[5] = {
+        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR"
+    };
+    const char* desc[5] = {
+        "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
+        "FAST INTEGER MATH", "LIVE RUNTIME STATUS"
+    };
+    int match = 0;
+    for (int i = 0; i < 5; ++i) {
+        if (!launcher_contains(names[i], launcher_query) &&
+            !launcher_contains(desc[i], launcher_query)) continue;
+        if (match == ordinal) return i;
+        ++match;
+    }
+    return -1;
+}
+
+static void launcher_reset_search(void) {
+    launcher_query[0] = 0;
+    launcher_query_len = 0;
+    launcher_selected = 0;
+}
+
+static void launcher_toggle(void) {
+    launcher_open = !launcher_open;
+    if (launcher_open) launcher_reset_search();
+    quick_settings_open = 0;
+    power_open = 0;
+    gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
+}
+
 static void draw_launcher(void) {
     if (!launcher_open) return;
     int x = 18, y = TOPBAR_H + 8;
-    int width = 360, height = 330;
-    draw_round_card(x + 6, y + 10, width, height, 20, bg, border);
+    int width = LAUNCHER_W, height = LAUNCHER_H;
+    int matches = launcher_match_count();
+    if (launcher_selected >= matches) launcher_selected = max_int(0, matches - 1);
+
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
     draw_round_card(x, y, width, height, 20, panel2, accent);
 
-    draw_text(x + 24, y + 20, "MYOS", accent);
-    draw_text(x + 24, y + 39, "APPLICATIONS", muted);
+    draw_text(x + 24, y + 18, "MYOS", accent);
+    draw_text(x + 24, y + 38, "APPLICATIONS", muted);
 
-    draw_round_card(x + 18, y + 66, width - 36, 38, 11, bg, border);
-    draw_round_rect(x + 32, y + 78, 12, 12, 4, muted);
-    draw_text(x + 54, y + 75, "SEARCH APPLICATIONS", muted);
+    draw_round_card(x + 18, y + 64, width - 36, 38, 11, bg, border);
+    draw_round_rect(x + 31, y + 76, 12, 12, 4, accent);
+    draw_text(x + 53, y + 73, launcher_query_len ? launcher_query : "SEARCH APPLICATIONS",
+              launcher_query_len ? text : muted);
+    if (launcher_query_len) draw_text(x + 53 + launcher_query_len * FONT_W, y + 73, "_", accent);
 
-    const char* names[5] = { "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR" };
-    const char* desc[5] = { "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION", "FAST INTEGER MATH", "LIVE RUNTIME STATUS" };
-    for (int i = 0; i < 5; ++i) {
-        int iy = y + 112 + i * 40;
-        int active = i == dock_hot;
-        draw_round_card(x + 18, iy, width - 36, 34, 10,
-                        active ? panel : bg, active ? accent : border);
-        draw_round_rect(x + 30, iy + 9, 10, 10, 4, active ? accent : muted);
-        draw_text(x + 50, iy + 5, names[i], active ? text : muted);
-        draw_text(x + 50, iy + 20, desc[i], border);
+    if (matches == 0) {
+        draw_text_centered(x + 18, y + 130, width - 36, "NO APPLICATIONS FOUND", muted);
+    } else {
+        for (int ordinal = 0; ordinal < matches && ordinal < 5; ++ordinal) {
+            int index = launcher_match_at(ordinal);
+            int iy = y + 112 + ordinal * 40;
+            int active = ordinal == launcher_selected;
+            draw_round_card(x + 18, iy, width - 36, 34, 10,
+                            active ? panel : bg, active ? accent : border);
+            if (index == 0) draw_icon_terminal(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 1) draw_icon_system(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 2) draw_icon_settings(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 3) draw_icon_calculator(x + 30, iy + 7, active ? accent : muted);
+            else draw_icon_monitor(x + 30, iy + 7, active ? accent : muted);
+            const char* names[5] = {
+                "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR"
+            };
+            draw_text(x + 64, iy + 5, names[index], active ? text : muted);
+        }
     }
+
+    draw_text(x + 20, y + height - 22, "UP/DOWN SELECT   ENTER OPEN   ESC CLOSE", muted);
 }
 
 static void draw_terminal_surface(const struct gui_window* w) {
@@ -1109,16 +1189,61 @@ static void calculator_key(int index) {
 static void draw_notification(void) {
     if (!notification_open || !notifications_enabled) return;
     const framebuffer_info_t* f = framebuffer_info();
-    int width = 326, height = 92;
+    int width = 326, height = 144;
     int x = (int)f->width - width - 22;
     int y = (int)f->height - FOOTER_H - height - 22;
-    draw_round_card(x + 4, y + 7, width, height, 16, bg, border);
-    draw_round_card(x, y, width, height, 16, panel2, accent);
-    draw_round_rect(x + 14, y + 16, 7, height - 32, 3, accent);
+    draw_round_card(x + 5, y + 8, width, height, 18, bg, border);
+    draw_round_card(x, y, width, height, 18, panel2, accent);
+    draw_round_rect(x + 14, y + 16, 7, height - 62, 3, accent);
     draw_text(x + 34, y + 14, "NOTIFICATIONS", accent);
-    draw_text(x + 34, y + 38, "MYOS BOOT COMPLETED", text);
-    draw_text(x + 34, y + 58, "GUI SERVICES READY", muted);
+    if (notifications_cleared) {
+        draw_text(x + 34, y + 44, "ALL CLEAR", text);
+        draw_text(x + 34, y + 66, "NO ACTIVE NOTIFICATIONS", muted);
+    } else {
+        draw_round_rect(x + 34, y + 41, 6, 6, 3, success);
+        draw_text(x + 48, y + 37, "MYOS BOOT COMPLETED", text);
+        draw_round_rect(x + 34, y + 67, 6, 6, 3, accent);
+        draw_text(x + 48, y + 63, "GUI SERVICES READY", muted);
+    }
+    draw_round_card(x + 18, y + 100, width - 36, 30, 10, bg, border);
+    draw_text_centered(x + 18, y + 107, width - 36, "CLEAR ALL", muted);
 }
+static int quick_settings_x(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    return f ? (int)f->width - QUICK_W - 18 : 0;
+}
+
+static int quick_settings_y(void) {
+    return TOPBAR_H + 6;
+}
+
+static void draw_quick_settings(void) {
+    if (!quick_settings_open) return;
+    const int x = quick_settings_x(), y = quick_settings_y();
+    draw_round_card(x + 5, y + 8, QUICK_W, QUICK_H, 18, bg, border);
+    draw_round_card(x, y, QUICK_W, QUICK_H, 18, panel2, accent);
+    draw_text(x + 20, y + 16, "QUICK SETTINGS", accent);
+    draw_text(x + 20, y + 38, "SYSTEM CONTROLS", muted);
+
+    draw_round_card(x + 16, y + 62, QUICK_W - 32, 38, 11, bg, border);
+    draw_text(x + 30, y + 73, "THEME", muted);
+    draw_text(x + 150, y + 73, theme_name, text);
+    draw_text(x + QUICK_W - 46, y + 73, ">", accent);
+
+    draw_round_card(x + 16, y + 106, QUICK_W - 32, 38, 11, bg, border);
+    draw_text(x + 30, y + 117, "NOTIFICATIONS", muted);
+    draw_text(x + 206, y + 117, notifications_enabled ? "ON" : "OFF",
+              notifications_enabled ? success : muted);
+
+    draw_round_card(x + 16, y + 150, QUICK_W - 32, 38, 11, bg, border);
+    draw_text(x + 30, y + 161, "ANIMATIONS", muted);
+    draw_text(x + 206, y + 161, animations_enabled ? "ON" : "OFF",
+              animations_enabled ? success : muted);
+
+    draw_round_card(x + 16, y + 194, QUICK_W - 32, 38, 11, accent, accent);
+    draw_text_centered(x + 16, y + 205, QUICK_W - 32, "OPEN SYSTEM MONITOR", bg);
+}
+
 static void draw_power_menu(void) {
     if (!power_open) return;
     const framebuffer_info_t* f = framebuffer_info();
@@ -1163,12 +1288,52 @@ static int point_in_launcher_button(void) {
 
 static int point_in_launcher_item(int* item) {
     if (!launcher_open || !item) return 0;
-    int top = TOPBAR_H + 50;
-    if (mouse_x_pos < 28 || mouse_x_pos >= 14 + LAUNCHER_W) return 0;
-    if (mouse_y_pos < top || mouse_y_pos >= top + 5 * 44) return 0;
-    *item = (mouse_y_pos - top) / 44;
-    if (*item < 0 || *item >= 5) return 0;
-    return 1;
+    int top = TOPBAR_H + 120;
+    if (mouse_x_pos < 36 || mouse_x_pos >= 18 + LAUNCHER_W - 18) return 0;
+    if (mouse_y_pos < top || mouse_y_pos >= top + 5 * 40) return 0;
+    int ordinal = (mouse_y_pos - top) / 40;
+    if (ordinal < 0 || ordinal >= launcher_match_count()) return 0;
+    if ((mouse_y_pos - top) % 40 >= 34) return 0;
+    *item = launcher_match_at(ordinal);
+    return *item >= 0;
+}
+
+static int point_in_system_tray(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return 0;
+    int x = (int)f->width;
+    return mouse_x_pos >= x - 546 && mouse_x_pos < x - 268 &&
+           mouse_y_pos >= 8 && mouse_y_pos < 54;
+}
+
+static int point_in_clock_capsule(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return 0;
+    int x = (int)f->width - 260;
+    return mouse_x_pos >= x && mouse_x_pos < x + 82 &&
+           mouse_y_pos >= 8 && mouse_y_pos < 54;
+}
+
+static int point_in_quick_settings_item(int row) {
+    if (!quick_settings_open) return 0;
+    const int x = quick_settings_x(), y = quick_settings_y();
+    if (mouse_x_pos < x + 10 || mouse_x_pos >= x + QUICK_W - 10) return 0;
+    if (row == 0) return mouse_y_pos >= y + 56 && mouse_y_pos < y + 104;
+    if (row == 1) return mouse_y_pos >= y + 104 && mouse_y_pos < y + 148;
+    if (row == 2) return mouse_y_pos >= y + 148 && mouse_y_pos < y + 192;
+    if (row == 3) return mouse_y_pos >= y + 192 && mouse_y_pos < y + 238;
+    return 0;
+}
+
+static int point_in_notification_clear(void) {
+    if (!notification_open || !notifications_enabled) return 0;
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return 0;
+    int width = 326, height = 144;
+    int x = (int)f->width - width - 22;
+    int y = (int)f->height - FOOTER_H - height - 22;
+    return mouse_x_pos >= x + 18 && mouse_x_pos < x + width - 18 &&
+           mouse_y_pos >= y + 100 && mouse_y_pos < y + 130;
 }
 
 static int title_control_at(const struct gui_window* w) {
@@ -1224,6 +1389,16 @@ static int point_in_settings_row(int row) {
 static void open_window(int index) {
     if (index < 0 || index >= WINDOW_COUNT) return;
     struct gui_window* w = &windows[index];
+    if (index < 5) {
+        int pos = 0;
+        while (pos < 5 && recent_apps[pos] != index) ++pos;
+        if (pos >= 5) pos = 4;
+        while (pos > 0) {
+            recent_apps[pos] = recent_apps[pos - 1];
+            --pos;
+        }
+        recent_apps[0] = index;
+    }
     if (!w->visible) {
         int dx, dy, dw, dh;
         dock_geometry(index, &dx, &dy, &dw, &dh);
@@ -1342,7 +1517,12 @@ void gui_init(void) {
     dock_hot = -1;
     for (int i = 0; i < 6; ++i) dock_hover_anim[i] = 0;
     launcher_open = 0;
+    launcher_selected = 0;
+    launcher_query_len = 0;
+    launcher_query[0] = 0;
+    quick_settings_open = 0;
     notification_open = 1;
+    notifications_cleared = 0;
     power_open = 0;
     clock_hour = clock_minute = clock_second = 0;
     clock_day = clock_month = 0;
@@ -1536,6 +1716,7 @@ void gui_redraw(void) {
 
     draw_notification();
     draw_power_menu();
+    draw_quick_settings();
     draw_launcher();
 }
 
