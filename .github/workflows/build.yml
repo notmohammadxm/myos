@@ -2,7 +2,7 @@ name: Build MyOS ISO
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, gui-08-ui-polish ]
   workflow_dispatch:
 
 permissions:
