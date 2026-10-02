@@ -691,10 +691,18 @@ static void draw_desktop_chrome(void) {
 
     draw_round_card(w - 320, 15, 112, 34, 12, bg, border);
     draw_round_rect(w - 308, 24, 7, 7, 3, success);
-    draw_text(w - 293, 18, "ONLINE", success);
+    draw_text(w - 293, 18, "READY", success);
 
     draw_round_card(w - 198, 15, 82, 34, 12, bg, border);
     draw_text_centered(w - 198, 18, 82, clock, text);
+    if (clock_valid) {
+        char date[12];
+        date[0]=(char)('0'+(clock_day/10)%10); date[1]=(char)('0'+clock_day%10); date[2]='/';
+        date[3]=(char)('0'+(clock_month/10)%10); date[4]=(char)('0'+clock_month%10); date[5]='/';
+        date[6]=(char)('0'+(clock_year/1000)%10); date[7]=(char)('0'+(clock_year/100)%10);
+        date[8]=(char)('0'+(clock_year/10)%10); date[9]=(char)('0'+clock_year%10); date[10]=0;
+        draw_text_centered(w - 190, 35, 66, date, muted);
+    }
 
     draw_round_card(w - 105, 15, 72, 34, 12,
                     notification_open ? panel : bg,
