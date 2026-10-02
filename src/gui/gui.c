@@ -170,6 +170,24 @@ static void draw_text(int x, int y, const char* s, uint32_t color) {
     }
 }
 
+static void draw_text_clipped(int x, int y, const char* s, uint32_t color, int max_width) {
+    if (!s || max_width < FONT_W) return;
+    int max_chars = max_width / FONT_W;
+    int len = (int)gui_strlen(s);
+    if (len <= max_chars) {
+        draw_text(x, y, s, color);
+        return;
+    }
+    if (max_chars <= 3) {
+        for (int i = 0; i < max_chars; ++i)
+            draw_char(x + i * FONT_W, y, s[i], color);
+        return;
+    }
+    for (int i = 0; i < max_chars - 3; ++i)
+        draw_char(x + i * FONT_W, y, s[i], color);
+    draw_text(x + (max_chars - 3) * FONT_W, y, "...", color);
+}
+
 static void set_palette(const char* name) {
     theme_name = name ? name : "matrix";
     if (theme_name[0] == 'i' && theme_name[1] == 'c') {
@@ -551,7 +569,7 @@ static void draw_window(const struct gui_window* w, const char* title, int index
     }
 
     draw_soft_divider(w->x + 14, w->y + TITLE_H + 1, w->w - 28, border);
-    draw_text(w->x + 24, w->y + 12, title, active ? text : muted);
+    draw_text_clipped(w->x + 24, w->y + 12, title, active ? text : muted, w->w - 140);
     if (active) {
         draw_round_rect(w->x + 14, w->y + 29, 7, 7, 3, accent);
         draw_text(w->x + 28, w->y + 27, "ACTIVE", accent);
@@ -829,15 +847,15 @@ static int launcher_match_at(int ordinal) {
         "FAST INTEGER MATH", "LIVE RUNTIME STATUS"
     };
     int match = 0;
-    for (int i = 0; i < 5; ++i) {
-        if (!launcher_contains(names[i], launcher_query) &&
-            !launcher_contains(desc[i], launcher_query)) continue;
-        if (match == ordinal) return i;
+    for (int pos = 0; pos < 5; ++pos) {
+        int index = recent_apps[pos];
+        if (!launcher_contains(names[index], launcher_query) &&
+            !launcher_contains(desc[index], launcher_query)) continue;
+        if (match == ordinal) return index;
         ++match;
     }
     return -1;
 }
-
 static void launcher_reset_search(void) {
     launcher_query[0] = 0;
     launcher_query_len = 0;
@@ -863,7 +881,7 @@ static void draw_launcher(void) {
     draw_round_card(x, y, width, height, 20, panel2, accent);
 
     draw_text(x + 24, y + 18, "MYOS", accent);
-    draw_text(x + 24, y + 38, "APPLICATIONS", muted);
+    draw_text(x + 24, y + 38, launcher_query_len ? "SEARCH RESULTS" : "RECENT APPLICATIONS", muted);
 
     draw_round_card(x + 18, y + 64, width - 36, 38, 11, bg, border);
     draw_round_rect(x + 31, y + 76, 12, 12, 4, accent);
