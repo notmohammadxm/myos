@@ -14,7 +14,7 @@
 #define TITLE_H 38
 #define MIN_WINDOW_W 300
 #define MIN_WINDOW_H 220
-#define WINDOW_COUNT 4
+#define WINDOW_COUNT 5
 struct gui_window {
     int x, y, w, h;
     int dragging;
@@ -25,6 +25,7 @@ struct gui_window {
 
 static int ready;
 static int dirty;
+static int dirty_x0, dirty_y0, dirty_x1, dirty_y1;
 static const char* theme_name = "matrix";
 static uint32_t bg, panel, panel2, accent, text, muted, border, terminal_bg;
 static uint32_t success, danger, warning;
@@ -39,6 +40,7 @@ static int mouse_x_pos;
 static int mouse_y_pos;
 static uint8_t mouse_prev_buttons;
 static int focused_window;
+static uint32_t runtime_ticks;
 static int dock_hot = -1;
 static int notification_open = 1;
 static int notifications_enabled = 1;
@@ -56,14 +58,16 @@ static int cursor_drawn_valid;
 static gui_action_t action_queue[4];
 static int action_head;
 static int action_tail;
-static int window_order[WINDOW_COUNT] = { 1, 2, 3, 0 };
+static int window_order[WINDOW_COUNT] = { 1, 2, 3, 4, 0 };
 
 static void gui_request_redraw(void);
+static void gui_request_terminal_redraw(void);
 static struct gui_window windows[WINDOW_COUNT] = {
     { 28, 104, 650, 500, 0, 0, 0, 1, 0 },
     { 704, 94, 290, 254, 0, 0, 0, 1, 0 },
     { 704, 372, 290, 246, 0, 0, 0, 1, 0 },
-    { 330, 170, 360, 390, 0, 0, 0, 0, 0 }
+    { 330, 170, 360, 390, 0, 0, 0, 0, 0 },
+    { 250, 150, 500, 420, 0, 0, 0, 0, 0 }
 };
 
 static int min_int(int a, int b) { return a < b ? a : b; }
@@ -323,6 +327,58 @@ static void draw_settings(const struct gui_window* w) {
     draw_text(w->x + 16, y + 22, "NOT PERSISTED", accent);
 }
 
+static void draw_monitor(const struct gui_window* w) {
+    if (!w->visible || w->minimized) return;
+    const framebuffer_info_t* f = framebuffer_info();
+    int x = w->x + 18, y = w->y + TITLE_H + 18;
+    uint32_t sec = runtime_ticks / 100u;
+    int min = (int)(sec / 60u);
+    int hour = min / 60;
+    min %= 60;
+    int s = (int)(sec % 60u);
+
+    draw_text(x, y, "SYSTEM MONITOR", accent);
+    draw_text(x, y + 28, "UPTIME", muted);
+    draw_text(x + 88, y + 28, "00:00:00", text);
+    /* Render HH:MM:SS without sprintf/libc. */
+    char clock[9];
+    clock[0] = (char)('0' + (hour / 10) % 10); clock[1] = (char)('0' + hour % 10);
+    clock[2] = ':'; clock[3] = (char)('0' + min / 10); clock[4] = (char)('0' + min % 10);
+    clock[5] = ':'; clock[6] = (char)('0' + s / 10); clock[7] = (char)('0' + s % 10); clock[8] = 0;
+    draw_text(x + 88, y + 28, clock, text);
+
+    draw_text(x, y + 62, "FRAMEBUFFER", muted);
+    if (f) {
+        char mode[24]; int mw = (int)f->width, mh = (int)f->height;
+        mode[0]=(char)('0'+(mw/1000)%10); mode[1]=(char)('0'+(mw/100)%10); mode[2]=(char)('0'+(mw/10)%10); mode[3]=(char)('0'+mw%10);
+        mode[4]='x'; mode[5]=(char)('0'+(mh/1000)%10); mode[6]=(char)('0'+(mh/100)%10); mode[7]=(char)('0'+(mh/10)%10); mode[8]=(char)('0'+mh%10);
+        mode[9]=' '; mode[10]='3'; mode[11]='2'; mode[12]='b'; mode[13]='p'; mode[14]='p'; mode[15]=0;
+        draw_text(x + 88, y + 62, mode, success);
+    }
+
+    draw_text(x, y + 96, "MOUSE", muted);
+    char pos[32];
+    pos[0]='X'; pos[1]=':'; pos[2]=' ';
+    int mx=mouse_x_pos, my=mouse_y_pos;
+    pos[3]=(char)('0'+(mx/1000)%10); pos[4]=(char)('0'+(mx/100)%10); pos[5]=(char)('0'+(mx/10)%10); pos[6]=(char)('0'+mx%10);
+    pos[7]=' '; pos[8]='Y'; pos[9]=':'; pos[10]=' ';
+    pos[11]=(char)('0'+(my/1000)%10); pos[12]=(char)('0'+(my/100)%10); pos[13]=(char)('0'+(my/10)%10); pos[14]=(char)('0'+my%10); pos[15]=0;
+    draw_text(x + 88, y + 96, pos, text);
+
+    draw_text(x, y + 130, "INPUT", muted);
+    draw_text(x + 88, y + 130, mouse_prev_buttons ? "MOUSE ACTIVE" : "IDLE", mouse_prev_buttons ? success : text);
+
+    renderer_rect(x, y + 166, w->w - 36, 1, border);
+    draw_text(x, y + 186, "KERNEL SERVICES", accent);
+    const char* services[6] = { "IRQ0 TIMER", "IRQ1 KEYBOARD", "IRQ12 MOUSE", "FRAMEBUFFER", "GUI EVENT LOOP", "SHELL BACKEND" };
+    for (int i = 0; i < 6; ++i) {
+        int yy = y + 214 + i * 25;
+        renderer_rect(x, yy + 3, 8, 8, success);
+        draw_text(x + 18, yy, services[i], text);
+        draw_text(x + w->w - 92, yy, "READY", success);
+    }
+}
+
 static void draw_desktop_chrome(void) {
     const framebuffer_info_t* f = framebuffer_info();
     int w = (int)f->width;
@@ -346,15 +402,15 @@ static void draw_desktop_chrome(void) {
     renderer_rect(bx - 5, by + 13, 5, 2, notification_open ? accent : muted);
 
     /* Dock. */
-    int dock_w = 488;
+    int dock_w = 584;
     int dock_h = 54;
     int dock_x = (w - dock_w) / 2;
     int dock_y = h - 62;
     renderer_rect(dock_x, dock_y, dock_w, dock_h, panel);
     renderer_border(dock_x, dock_y, dock_w, dock_h, 1, border);
 
-    const char* names[5] = { "TERM", "SYSTEM", "SETTINGS", "CALC", "POWER" };
-    for (int i = 0; i < 5; ++i) {
+    const char* names[6] = { "TERM", "SYSTEM", "SETTINGS", "CALC", "MONITOR", "POWER" };
+    for (int i = 0; i < 6; ++i) {
         int cell_x = dock_x + 7 + i * 96;
         uint32_t c = dock_hot == i ? accent : muted;
         renderer_rect(cell_x, dock_y + 6, 88, 42, i == dock_hot ? panel2 : bg);
@@ -363,7 +419,8 @@ static void draw_desktop_chrome(void) {
         if (i == 1) draw_icon_system(cell_x + 8, dock_y + 17, c);
         if (i == 2) draw_icon_settings(cell_x + 8, dock_y + 17, c);
         if (i == 3) { draw_icon_settings(cell_x + 8, dock_y + 17, c); }
-        if (i == 4) draw_icon_power(cell_x + 8, dock_y + 17, c);
+        if (i == 4) draw_icon_system(cell_x + 8, dock_y + 17, c);
+        if (i == 5) draw_icon_power(cell_x + 8, dock_y + 17, c);
         draw_text(cell_x + 34, dock_y + 20, names[i], c);
     }
 
@@ -549,7 +606,7 @@ static int title_control_at(const struct gui_window* w) {
 
 static int point_in_dock(int index) {
     const framebuffer_info_t* f = framebuffer_info();
-    int dock_w = 488;
+    int dock_w = 584;
     int dock_x = ((int)f->width - dock_w) / 2;
     int dock_y = (int)f->height - 62;
     int x = dock_x + 7 + index * 96;
@@ -616,6 +673,7 @@ void gui_init(void) {
     cursor_request_pending = 0;
     cursor_drawn_x = cursor_drawn_y = 0;
     cursor_drawn_valid = 0;
+    runtime_ticks = 0;
     gui_request_redraw();
 }
 
@@ -640,7 +698,7 @@ void gui_terminal_clear(void) {
     selection_anchor = -1;
     selection_cursor = 0;
     term_view_top = 0;
-    gui_request_redraw();
+    gui_request_terminal_redraw();
 }
 
 void gui_terminal_begin_input(void) {
@@ -652,7 +710,7 @@ void gui_terminal_begin_input(void) {
     selection_anchor = -1;
     selection_cursor = 0;
     terminal_follow_bottom();
-    gui_request_redraw();
+    gui_request_terminal_redraw();
 }
 
 void gui_terminal_edit(const char* text_in, int len, int cursor_pos, uint8_t shell_color) {
@@ -678,7 +736,7 @@ void gui_terminal_edit(const char* text_in, int len, int cursor_pos, uint8_t she
     ty = input_y;
     selection_cursor = cursor_pos;
     terminal_follow_bottom();
-    gui_request_redraw();
+    gui_request_terminal_redraw();
 }
 
 void gui_terminal_set_cursor(int cursor_pos) {
@@ -688,14 +746,14 @@ void gui_terminal_set_cursor(int cursor_pos) {
     tx = input_x + cursor_pos;
     ty = input_y;
     selection_cursor = cursor_pos;
-    gui_request_redraw();
+    gui_request_terminal_redraw();
 }
 
 void gui_terminal_putchar(char c, uint8_t shell_color) {
     if (!ready) return;
     if (c == '\r') {
         tx = 0;
-        gui_request_redraw();
+        gui_request_terminal_redraw();
         return;
     }
     if (c == '\b') {
@@ -704,7 +762,7 @@ void gui_terminal_putchar(char c, uint8_t shell_color) {
         term[ty][tx] = ' ';
         term_attr[ty][tx] = 0x0A;
         terminal_follow_bottom();
-        gui_request_redraw();
+        gui_request_terminal_redraw();
         return;
     }
     if (c == '\t') {
@@ -717,7 +775,7 @@ void gui_terminal_putchar(char c, uint8_t shell_color) {
         ++ty;
         if (ty >= TERM_ROWS) terminal_scroll_buffer();
         terminal_follow_bottom();
-        gui_request_redraw();
+        gui_request_terminal_redraw();
         return;
     }
     if ((unsigned char)c < 32u) return;
@@ -735,10 +793,36 @@ void gui_terminal_putchar(char c, uint8_t shell_color) {
         if (ty >= TERM_ROWS) terminal_scroll_buffer();
     }
     terminal_follow_bottom();
-    gui_request_redraw();
+    gui_request_terminal_redraw();
 }
 
-void gui_request_redraw(void) { dirty = 1; }
+static void gui_request_redraw_rect(int x, int y, int w, int h) {
+    if (!ready || w <= 0 || h <= 0) return;
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)f->width) w = (int)f->width - x;
+    if (y + h > (int)f->height) h = (int)f->height - y;
+    if (w <= 0 || h <= 0) return;
+    int x1 = x + w, y1 = y + h;
+    if (!dirty) { dirty_x0=x; dirty_y0=y; dirty_x1=x1; dirty_y1=y1; dirty=1; return; }
+    if (x < dirty_x0) dirty_x0=x;
+    if (y < dirty_y0) dirty_y0=y;
+    if (x1 > dirty_x1) dirty_x1=x1;
+    if (y1 > dirty_y1) dirty_y1=y1;
+}
+
+void gui_request_redraw(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!ready || !f) return;
+    dirty_x0 = 0; dirty_y0 = 0; dirty_x1 = (int)f->width; dirty_y1 = (int)f->height; dirty = 1;
+}
+
+static void gui_request_terminal_redraw(void) {
+    const struct gui_window* w = &windows[0];
+    gui_request_redraw_rect(w->x, w->y, w->w, w->h);
+}
 
 void gui_redraw(void) {
     if (!ready) return;
@@ -751,14 +835,16 @@ void gui_redraw(void) {
         if (idx == 0) draw_window(&windows[idx], "TERMINAL", idx);
         else if (idx == 1) draw_window(&windows[idx], "SYSTEM INFORMATION", idx);
         else if (idx == 2) draw_window(&windows[idx], "SETTINGS", idx);
-        else draw_window(&windows[idx], "CALCULATOR", idx);
+        else if (idx == 3) draw_window(&windows[idx], "CALCULATOR", idx);
+        else draw_window(&windows[idx], "SYSTEM MONITOR", idx);
     }
     for (int i = 0; i < WINDOW_COUNT; ++i) {
         int idx = window_order[i];
         if (idx == 0) draw_terminal_surface(&windows[idx]);
         else if (idx == 1) draw_sysinfo(&windows[idx]);
         else if (idx == 2) draw_settings(&windows[idx]);
-        else draw_calculator(&windows[idx]);
+        else if (idx == 3) draw_calculator(&windows[idx]);
+        else draw_monitor(&windows[idx]);
     }
 
     draw_notification();
@@ -768,8 +854,18 @@ void gui_redraw(void) {
 void gui_present(void) {
     if (!ready) return;
     if (dirty) {
+        int px = dirty_x0, py = dirty_y0;
+        int pw = dirty_x1 - dirty_x0, ph = dirty_y1 - dirty_y0;
+        if (cursor_drawn_valid)
+            renderer_present_rect(cursor_drawn_x, cursor_drawn_y, 7, 17);
         gui_redraw();
+        /* The backbuffer is rebuilt completely, but the physical framebuffer
+         * only needs the region that actually changed. This avoids multi-MB
+         * uncached writes for every keypress or small GUI interaction. */
+        renderer_reset_dirty();
+        renderer_mark_dirty_rect(px, py, pw, ph);
         renderer_present();
+        dirty = 0;
         cursor_drawn_valid = 0;
     }
     update_cursor_overlay();
@@ -802,14 +898,14 @@ void gui_terminal_set_selection(int anchor, int cursor_pos) {
         selection_anchor = -1;
     }
     selection_cursor = cursor_pos;
-    gui_request_redraw();
+    gui_request_terminal_redraw();
 }
 
 void gui_terminal_scroll(int rows) {
     if (!ready) return;
     int max_top = max_int(0, TERM_ROWS - term_view_rows);
     term_view_top = max_int(0, min_int(term_view_top + rows, max_top));
-    gui_request_redraw();
+    gui_request_terminal_redraw();
 }
 
 static void terminal_mouse_click(void) {
@@ -846,7 +942,7 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
 
     int old_dock_hot = dock_hot;
     dock_hot = -1;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         if (point_in_dock(i)) { dock_hot = i; break; }
     }
     if (dock_hot != old_dock_hot) gui_request_redraw();
@@ -877,10 +973,9 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
         }
         /* Dock. */
         else if (dock_hot >= 0) {
-            power_open = dock_hot == 4 ? !power_open : 0;
-            if (dock_hot < 4) {
+            power_open = dock_hot == 5 ? !power_open : 0;
+            if (dock_hot < 5) {
                 int idx = dock_hot;
-                if (idx == 3) idx = 3;
                 windows[idx].visible = 1;
                 windows[idx].minimized = 0;
                 promote_window(idx);
@@ -942,12 +1037,27 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
         for (int i = 0; i < WINDOW_COUNT; ++i) windows[i].dragging = 0;
     } else if (focused_window >= 0 && windows[focused_window].dragging) {
         struct gui_window* w = &windows[focused_window];
+        int old_x = w->x, old_y = w->y;
         w->x = mouse_x_pos - w->drag_dx;
         w->y = mouse_y_pos - w->drag_dy;
         clamp_window(w);
+        int x0 = old_x < w->x ? old_x : w->x;
+        int y0 = old_y < w->y ? old_y : w->y;
+        int x1 = (old_x + w->w) > (w->x + w->w) ? (old_x + w->w) : (w->x + w->w);
+        int y1 = (old_y + w->h) > (w->y + w->h) ? (old_y + w->h) : (w->y + w->h);
+        gui_request_redraw_rect(x0, y0, x1 - x0, y1 - y0);
     }
 
     mouse_prev_buttons = new_buttons;
+}
+
+void gui_set_runtime_ticks(uint32_t ticks) {
+    if (!ready || (ticks % 25u) != 0u) return;
+    if (runtime_ticks != ticks) {
+        runtime_ticks = ticks;
+        if (windows[4].visible && !windows[4].minimized)
+            gui_request_redraw_rect(windows[4].x, windows[4].y, windows[4].w, windows[4].h);
+    }
 }
 
 int gui_take_terminal_cursor(int* cursor_pos) {

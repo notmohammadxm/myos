@@ -2267,6 +2267,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
         }
 
         if (gui_available()) {
+            gui_set_runtime_ticks(timer_ticks);
             mouse_event_t mouse_event;
             while (mouse_poll(&mouse_event)) {
                 /* Keep every button transition so a fast click cannot be

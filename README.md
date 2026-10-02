@@ -91,3 +91,16 @@ The GUI now includes a dedicated Calculator window, a five-item dock, applicatio
 - Mouse button transitions remain processed individually so fast clicks are not lost.
 
 Full ISO/QEMU boot testing still requires NASM, GRUB and QEMU, which are not installed in the build environment used for this phase.
+
+
+## Phase 7
+
+- Fixed the main GUI performance bottleneck: physical framebuffer presentation is now limited to the requested dirty region instead of copying the entire framebuffer for every small interaction.
+- Terminal editing requests only repaint the terminal window region.
+- Window dragging repaints only the union of the old/new window rectangles.
+- Cursor overlay is restored before partial redraws to prevent cursor trails.
+- Added a live System Monitor GUI app with uptime, framebuffer mode, mouse position and kernel-service status.
+- Expanded the Dock with the System Monitor.
+- Existing shell and GUI functionality is preserved.
+- Tests: `make test` PASS; freestanding i386 C compile with `-Wall -Wextra -Werror` PASS.
+- Bare-metal ISO/QEMU boot was not verified in this environment because NASM/GRUB/QEMU are unavailable.

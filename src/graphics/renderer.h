@@ -12,5 +12,7 @@ void renderer_pixel(int x, int y, uint32_t color);
 void renderer_line(int x0, int y0, int x1, int y1, uint32_t color);
 void renderer_present(void);
 void renderer_present_rect(int x, int y, int width, int height);
+void renderer_reset_dirty(void);
+void renderer_mark_dirty_rect(int x, int y, int width, int height);
 
 #endif
