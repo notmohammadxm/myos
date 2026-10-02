@@ -15,6 +15,7 @@ typedef struct {
 
 void gui_init(void);
 int gui_available(void);
+int gui_keyboard_event(int event, int ctrl, int shift);
 void gui_set_theme(const char* name);
 void gui_terminal_clear(void);
 void gui_terminal_begin_input(void);
