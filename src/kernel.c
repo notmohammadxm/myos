@@ -472,7 +472,8 @@ static const struct theme_def themes[] = {
     { "matrix", 0x0A, 0x00 },
     { "ice",    0x0B, 0x01 },
     { "amber",  0x0E, 0x00 },
-    { "mono",   0x0F, 0x00 }
+    { "mono",   0x0F, 0x00 },
+    { "light",  0x00, 0x0F }
 };
 
 static void apply_theme(const struct theme_def* t) {
@@ -2170,6 +2171,10 @@ void kernel_main(uint32_t magic, void* mb_info) {
         int event;
         int keyboard_budget = 32;
         while (keyboard_budget-- > 0 && (event = kbd_get_event()) >= 0) {
+            if (gui_console_enabled && gui_available() &&
+                gui_keyboard_event(event, ctrl_down, shift_down)) {
+                continue;
+            }
             if (event == KEY_UP) {
                 if (history_count > 0 && history_cursor > 0) {
                     --history_cursor;
@@ -2262,9 +2267,6 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     gui_open_window(event - '1');
                     continue;
                 }
-            } else if (gui_console_enabled && gui_available() &&
-                       gui_keyboard_event(event, ctrl_down, shift_down)) {
-                continue;
             } else if (event >= 32 && event < 127) {
                 if (selection_anchor >= 0 && selection_anchor != cursor_pos) {
                     int a = selection_anchor, b = cursor_pos;
@@ -2316,7 +2318,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 if (action.type == GUI_ACTION_REBOOT) execute("reboot");
                 else if (action.type == GUI_ACTION_SHUTDOWN) execute("shutdown");
                 else if (action.type == GUI_ACTION_THEME) {
-                    static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono" };
+                    static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono", "light" };
                     int next_theme = 0;
                     for (size_t i = 0; i < sizeof(gui_theme_names) / sizeof(gui_theme_names[0]); ++i) {
                         if (streq(current_theme, gui_theme_names[i])) {
