@@ -1462,15 +1462,94 @@ static void finish_all_window_animations(void) {
 
 static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     (void)shift;
-    if (!ready || focused_window < 0 || focused_window >= WINDOW_COUNT) return 0;
+    if (!ready) return 0;
+
+    if (launcher_open) {
+        int matches = launcher_match_count();
+        if (event == GUI_KEY_ESCAPE) {
+            launcher_open = 0;
+            launcher_reset_search();
+            gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
+            return 1;
+        }
+        if (event == GUI_KEY_UP) {
+            if (matches > 0) launcher_selected = (launcher_selected + matches - 1) % matches;
+            gui_request_redraw_rect(18, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H);
+            return 1;
+        }
+        if (event == GUI_KEY_DOWN) {
+            if (matches > 0) launcher_selected = (launcher_selected + 1) % matches;
+            gui_request_redraw_rect(18, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H);
+            return 1;
+        }
+        if (event == '\n' || event == '\r') {
+            if (matches > 0) {
+                int index = launcher_match_at(launcher_selected);
+                launcher_open = 0;
+                launcher_reset_search();
+                open_window(index);
+            }
+            return 1;
+        }
+        if (event == 8 || event == GUI_KEY_DELETE) {
+            if (launcher_query_len > 0) {
+                --launcher_query_len;
+                launcher_query[launcher_query_len] = 0;
+                launcher_selected = 0;
+                gui_request_redraw_rect(18, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H);
+            }
+            return 1;
+        }
+        if (!ctrl && event >= 32 && event < 127) {
+            if (launcher_query_len < (int)sizeof(launcher_query) - 1) {
+                launcher_query[launcher_query_len++] = (char)event;
+                launcher_query[launcher_query_len] = 0;
+                launcher_selected = 0;
+                gui_request_redraw_rect(18, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H);
+            }
+            return 1;
+        }
+        return 1;
+    }
+
+    if (quick_settings_open) {
+        if (event == GUI_KEY_ESCAPE) {
+            quick_settings_open = 0;
+            gui_request_redraw_rect(0, TOPBAR_H, (int)framebuffer_info()->width,
+                                    QUICK_H + 18);
+            return 1;
+        }
+        if (event == '1' || event == '2' || event == '3') {
+            if (event == '1') action_push(GUI_ACTION_THEME, 0);
+            else if (event == '2') notifications_enabled = !notifications_enabled;
+            else animations_enabled = !animations_enabled;
+            if (!animations_enabled) finish_all_window_animations();
+            gui_request_redraw();
+            return 1;
+        }
+        return 1;
+    }
+
+    if (focused_window < 0 || focused_window >= WINDOW_COUNT) {
+        if (event == GUI_KEY_ESCAPE) {
+            launcher_open = 0;
+            quick_settings_open = 0;
+            power_open = 0;
+            gui_request_redraw();
+            return 1;
+        }
+        return 0;
+    }
+
     if (ctrl && event >= '1' && event <= '5') return 0;
     if (focused_window == 0) return 0;
+
     if (focused_window == 3) {
         if (event == '\n' || event == '\r') {
             calculator_evaluate();
             return 1;
         }
-        if (event == 8 || event == 127) {
+        if (event == 8 || event == 127 || event == GUI_KEY_DELETE) {
             calculator_backspace();
             gui_request_redraw();
             return 1;
@@ -1485,10 +1564,11 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
             }
         }
     }
+
+    if (event == GUI_KEY_ESCAPE) return 1;
     if (event == GUI_KEY_CTRL_L) return 1;
     return 1;
 }
-
 void gui_init(void) {
     ready = renderer_available();
     if (!ready) return;
@@ -1945,25 +2025,58 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
 
     if (pressed & 1u) {
         if (launcher_open) {
-            if (point_in_launcher_button()) {
+            int launcher_item = -1;
+            if (point_in_launcher_item(&launcher_item)) {
+                open_window(launcher_item);
                 launcher_open = 0;
-                gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
+                launcher_reset_search();
+                gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
+            } else if (point_in_launcher_button()) {
+                launcher_toggle();
             } else {
-                int item = -1;
-                if (point_in_launcher_item(&item)) open_window(item);
-                else {
-                    launcher_open = 0;
-                    gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
-                }
+                launcher_open = 0;
+                launcher_reset_search();
+                gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
+            }
+        } else if (quick_settings_open) {
+            if (point_in_quick_settings_item(0)) {
+                action_push(GUI_ACTION_THEME, 0);
+                gui_request_redraw();
+            } else if (point_in_quick_settings_item(1)) {
+                notifications_enabled = !notifications_enabled;
+                gui_request_redraw();
+            } else if (point_in_quick_settings_item(2)) {
+                animations_enabled = !animations_enabled;
+                if (!animations_enabled) finish_all_window_animations();
+                gui_request_redraw();
+            } else if (point_in_quick_settings_item(3)) {
+                quick_settings_open = 0;
+                open_window(4);
+            } else if (point_in_launcher_button()) {
+                launcher_toggle();
+            } else {
+                quick_settings_open = 0;
+                gui_request_redraw_rect(0, TOPBAR_H, (int)f->width, QUICK_H + 18);
             }
         } else if (point_in_launcher_button()) {
-            launcher_open = !launcher_open;
-            power_open = 0;
-            gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
+            launcher_toggle();
+        } else if (point_in_notification_clear()) {
+            notifications_cleared = 1;
+            notification_open = 1;
+            gui_request_redraw();
         } else if (point_in_notification_bell()) {
             notification_open = !notification_open;
             power_open = 0;
+            quick_settings_open = 0;
             gui_request_redraw();
+        } else if (point_in_system_tray()) {
+            quick_settings_open = 1;
+            launcher_open = 0;
+            power_open = 0;
+            gui_request_redraw_rect((int)f->width - QUICK_W - 28, TOPBAR_H, QUICK_W + 20, QUICK_H + 20);
+        } else if (point_in_clock_capsule()) {
+            quick_settings_open = 0;
+            open_window(4);
         } else if (point_in_power_button(0)) {
             action_push(GUI_ACTION_REBOOT, 0);
             power_open = 0;
@@ -1976,6 +2089,7 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
             if (dock_hot == 5) {
                 power_open = !power_open;
                 launcher_open = 0;
+                quick_settings_open = 0;
                 gui_request_redraw();
             } else {
                 open_window(dock_hot);
@@ -2078,13 +2192,14 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                 if (w->resize_edges & 8) top = bottom - MIN_WINDOW_H;
                 else bottom = top + MIN_WINDOW_H;
             }
+            int old_x = w->x, old_y = w->y, old_w = w->w, old_h = w->h;
             window_set_target(w, left, top, right - left, bottom - top);
             w->x = w->target_x;
             w->y = w->target_y;
             w->w = w->target_w;
             w->h = w->target_h;
             save_restore_geometry(w);
-            window_transition_rect(w, w->x, w->y, w->w, w->h);
+            window_transition_rect(w, old_x, old_y, old_w, old_h);
         }
     }
 
