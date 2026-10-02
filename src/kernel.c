@@ -51,6 +51,7 @@ static volatile uint16_t unit_test_vga[VGA_CELLS];
 #define KEY_SHIFT_LEFT  0x89
 #define KEY_SHIFT_RIGHT 0x8A
 #define KEY_CTRL_L      0x8B
+#define KEY_ESCAPE      0x8C
 
 static volatile uint16_t* const vga = (volatile uint16_t*)VGA_MEMORY;
 static int row = 0;
@@ -491,7 +492,7 @@ static void cmd_theme(const char* arg) {
     if (!*arg) {
         print("Current theme: ");
         print(current_theme);
-        print("\nAvailable themes: matrix ice amber mono\n");
+        print("\nAvailable themes: matrix ice amber mono light\n");
         return;
     }
 
@@ -504,7 +505,7 @@ static void cmd_theme(const char* arg) {
         }
     }
 
-    print("Unknown theme. Use: matrix, ice, amber, mono\n");
+    print("Unknown theme. Use: matrix, ice, amber, mono, light\n");
 }
 
 /* ---------- RTC ---------- */
@@ -1988,6 +1989,12 @@ void irq1_handler(void) {
 
     if (ctrl_down && code == 0x26) {
         kbd_push(KEY_CTRL_L);
+        pic_eoi(1);
+        return;
+    }
+
+    if (code == 0x01) {
+        kbd_push(KEY_ESCAPE);
         pic_eoi(1);
         return;
     }
