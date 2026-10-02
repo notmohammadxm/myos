@@ -20,12 +20,20 @@
 #define RESIZE_ZONE 14
 #define ANIMATION_TICKS 2u
 #define GUI_KEY_CTRL_L 0x8B
+#define GUI_KEY_UP 0x80
+#define GUI_KEY_DOWN 0x81
+#define GUI_KEY_LEFT 0x82
+#define GUI_KEY_RIGHT 0x83
+#define GUI_KEY_DELETE 0x84
+#define GUI_KEY_ESCAPE 0x8C
 #define DOCK_W 700
 #define DOCK_H 64
 #define DOCK_CELL_W 112
 #define DOCK_Y_FROM_BOTTOM 76
-#define LAUNCHER_W 320
-#define LAUNCHER_H 292
+#define LAUNCHER_W 360
+#define LAUNCHER_H 330
+#define QUICK_W 300
+#define QUICK_H 250
 struct gui_window {
     int x, y, w, h;
     int target_x, target_y, target_w, target_h;
@@ -78,8 +86,13 @@ static int clock_valid;
 static int dock_hot = -1;
 static int dock_hover_anim[6];
 static int launcher_open;
+static int launcher_selected;
+static int launcher_query_len;
+static char launcher_query[32];
+static int quick_settings_open;
 static int notification_open = 1;
 static int notifications_enabled = 1;
+static int notifications_cleared;
 static int animations_enabled = 1;
 static int power_open;
 static char calc_display[32] = "0";
@@ -182,6 +195,18 @@ static void set_palette(const char* name) {
         success = framebuffer_make_color(168, 232, 144);
         warning = framebuffer_make_color(255, 207, 99);
         danger = framebuffer_make_color(255, 108, 107);
+    } else if (theme_name[0] == 'l' && theme_name[1] == 'i') {
+        bg = framebuffer_make_color(237, 241, 247);
+        panel = framebuffer_make_color(255, 255, 255);
+        panel2 = framebuffer_make_color(248, 250, 253);
+        terminal_bg = framebuffer_make_color(246, 248, 251);
+        accent = framebuffer_make_color(42, 112, 224);
+        text = framebuffer_make_color(25, 31, 42);
+        muted = framebuffer_make_color(94, 104, 120);
+        border = framebuffer_make_color(202, 209, 220);
+        success = framebuffer_make_color(34, 145, 84);
+        warning = framebuffer_make_color(191, 126, 24);
+        danger = framebuffer_make_color(207, 58, 73);
     } else if (theme_name[0] == 'm' && theme_name[1] == 'o') {
         bg = framebuffer_make_color(12, 12, 12);
         panel = framebuffer_make_color(22, 22, 22);
@@ -486,9 +511,8 @@ static uint32_t control_color(const struct gui_window* w, int control) {
 }
 
 static void draw_control_button(const struct gui_window* w, int center_x, int control, uint32_t color) {
-    renderer_rect(center_x - 11, w->y + 10, 22, 20,
-                  w->hover_control == control ? panel2 : panel);
-    renderer_border(center_x - 11, w->y + 10, 22, 20, 1, color);
+    draw_round_card(center_x - 11, w->y + 10, 22, 20, 7,
+                    w->hover_control == control ? panel2 : panel, color);
     int cy = w->y + 20;
     if (control == 1) {
         renderer_rect(center_x - 5, cy + 3, 10, 2, color);
@@ -689,19 +713,27 @@ static void draw_desktop_chrome(void) {
     draw_text(78, 18, "MYOS", accent);
     draw_text(126, 18, "DESKTOP", muted);
 
-    draw_round_card(w - 320, 15, 112, 34, 12, bg, border);
-    draw_round_rect(w - 308, 24, 7, 7, 3, success);
-    draw_text(w - 293, 18, "READY", success);
+    draw_round_card(w - 536, 15, 86, 34, 12, bg, border);
+    draw_round_rect(w - 524, 25, 6, 6, 3, success);
+    draw_text(w - 512, 18, "NET", success);
 
-    draw_round_card(w - 198, 15, 82, 34, 12, bg, border);
-    draw_text_centered(w - 198, 18, 82, clock, text);
+    draw_round_card(w - 444, 15, 86, 34, 12, bg, border);
+    draw_round_rect(w - 432, 25, 6, 6, 3, success);
+    draw_text(w - 420, 18, "MOUSE", success);
+
+    draw_round_card(w - 352, 15, 86, 34, 12, bg, border);
+    draw_round_rect(w - 340, 25, 6, 6, 3, success);
+    draw_text(w - 328, 18, "CPU", success);
+
+    draw_round_card(w - 260, 15, 82, 34, 12, bg, border);
+    draw_text_centered(w - 260, 18, 82, clock, text);
     if (clock_valid) {
         char date[12];
         date[0]=(char)('0'+(clock_day/10)%10); date[1]=(char)('0'+clock_day%10); date[2]='/';
         date[3]=(char)('0'+(clock_month/10)%10); date[4]=(char)('0'+clock_month%10); date[5]='/';
         date[6]=(char)('0'+(clock_year/1000)%10); date[7]=(char)('0'+(clock_year/100)%10);
         date[8]=(char)('0'+(clock_year/10)%10); date[9]=(char)('0'+clock_year%10); date[10]=0;
-        draw_text_centered(w - 190, 35, 66, date, muted);
+        draw_text_centered(w - 252, 35, 66, date, muted);
     }
 
     draw_round_card(w - 105, 15, 72, 34, 12,
