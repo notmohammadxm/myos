@@ -14,5 +14,7 @@ void renderer_present(void);
 void renderer_present_rect(int x, int y, int width, int height);
 void renderer_reset_dirty(void);
 void renderer_mark_dirty_rect(int x, int y, int width, int height);
+void renderer_set_clip_rect(int x, int y, int width, int height);
+void renderer_clear_clip(void);
 
 #endif

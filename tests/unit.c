@@ -54,6 +54,17 @@ static void test_calculator(void) {
     (void)calc_expr(&p4); check(p4.error);
 }
 
+static void test_gui_calculator(void) {
+    int32_t value = 0;
+    check(gui_test_calculate("2+3*4", &value) && value == 14);
+    check(gui_test_calculate("(12+8)*3", &value) && value == 60);
+    check(gui_test_calculate("20/5+7", &value) && value == 11);
+    check(gui_test_calculate("17%5", &value) && value == 2);
+    check(gui_test_calculate("-8+3", &value) && value == -5);
+    check(!gui_test_calculate("1/0", &value));
+    check(!gui_test_calculate("2+", &value));
+}
+
 static void test_history_ring(void) {
     history_count = 0;
     history_head = 0;
@@ -180,6 +191,7 @@ static void test_font_presence(void) {
 
 int test_main(void) {
     test_calculator();
+    test_gui_calculator();
     test_history_ring();
     test_completion_prefix();
     test_acpi_s5_parser();

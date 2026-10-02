@@ -14,6 +14,8 @@ static uint32_t buffer_height;
 static uint32_t buffer_pitch_pixels;
 static int dirty;
 static int dirty_x0, dirty_y0, dirty_x1, dirty_y1;
+static int clip_enabled;
+static int clip_x0, clip_y0, clip_x1, clip_y1;
 
 static void mark_dirty_rect(int x, int y, int width, int height) {
     if (!ready || width <= 0 || height <= 0) return;
@@ -23,6 +25,13 @@ static void mark_dirty_rect(int x, int y, int width, int height) {
     if (y + height > (int)buffer_height) height = (int)buffer_height - y;
     if (width <= 0 || height <= 0) return;
     int x1 = x + width, y1 = y + height;
+    if (clip_enabled) {
+        if (x < clip_x0) x = clip_x0;
+        if (y < clip_y0) y = clip_y0;
+        if (x1 > clip_x1) x1 = clip_x1;
+        if (y1 > clip_y1) y1 = clip_y1;
+        if (x >= x1 || y >= y1) return;
+    }
     if (!dirty) { dirty_x0=x; dirty_y0=y; dirty_x1=x1; dirty_y1=y1; dirty=1; return; }
     if (x < dirty_x0) dirty_x0=x;
     if (y < dirty_y0) dirty_y0=y;
@@ -58,10 +67,26 @@ static int clip_rect(int* x, int* y, int* width, int* height) {
     return 1;
 }
 
+void renderer_set_clip_rect(int x, int y, int width, int height) {
+    clip_enabled = 0;
+    if (!ready || width <= 0 || height <= 0) return;
+    if (!clip_rect(&x, &y, &width, &height)) return;
+    clip_x0 = x;
+    clip_y0 = y;
+    clip_x1 = x + width;
+    clip_y1 = y + height;
+    clip_enabled = 1;
+}
+
+void renderer_clear_clip(void) {
+    clip_enabled = 0;
+}
+
 void renderer_init(void) {
     const framebuffer_info_t* f = framebuffer_info();
     ready = 0;
     dirty = 0;
+    clip_enabled = 0;
     dirty_x0 = dirty_y0 = dirty_x1 = dirty_y1 = 0;
     buffer_width = buffer_height = buffer_pitch_pixels = 0;
     if (!framebuffer_available() || !f) return;
@@ -84,6 +109,7 @@ int renderer_available(void) {
 void renderer_pixel(int x, int y, uint32_t color) {
     if (!ready) return;
     if (x < 0 || y < 0 || (uint32_t)x >= buffer_width || (uint32_t)y >= buffer_height) return;
+    if (clip_enabled && (x < clip_x0 || y < clip_y0 || x >= clip_x1 || y >= clip_y1)) return;
     backbuffer[(uint32_t)y * buffer_pitch_pixels + (uint32_t)x] = color;
     mark_dirty_rect(x, y, 1, 1);
 }
@@ -100,6 +126,16 @@ void renderer_clear(uint32_t color) {
 void renderer_rect(int x, int y, int width, int height, uint32_t color) {
     if (!ready) return;
     if (!clip_rect(&x, &y, &width, &height)) return;
+    if (clip_enabled) {
+        int x2 = x + width, y2 = y + height;
+        if (x < clip_x0) x = clip_x0;
+        if (y < clip_y0) y = clip_y0;
+        if (x2 > clip_x1) x2 = clip_x1;
+        if (y2 > clip_y1) y2 = clip_y1;
+        width = x2 - x;
+        height = y2 - y;
+        if (width <= 0 || height <= 0) return;
+    }
     for (int py = y; py < y + height; ++py) {
         uint32_t* row = &backbuffer[(uint32_t)py * buffer_pitch_pixels + (uint32_t)x];
         for (int px = 0; px < width; ++px) row[px] = color;
@@ -128,7 +164,8 @@ void renderer_line(int x0, int y0, int x1, int y1, uint32_t color) {
     int err = dx + dy;
     for (;;) {
         if (x0 >= 0 && y0 >= 0 && (uint32_t)x0 < buffer_width &&
-            (uint32_t)y0 < buffer_height) {
+            (uint32_t)y0 < buffer_height &&
+            (!clip_enabled || (x0 >= clip_x0 && x0 < clip_x1 && y0 >= clip_y0 && y0 < clip_y1))) {
             backbuffer[(uint32_t)y0 * buffer_pitch_pixels + (uint32_t)x0] = color;
         }
         if (x0 == x1 && y0 == y1) break;
@@ -148,9 +185,9 @@ void renderer_present_rect(int x, int y, int width, int height) {
     if (!clip_rect(&x, &y, &width, &height)) return;
 
     for (int py = y; py < y + height; ++py) {
-        const uint8_t* src = (const uint8_t*)&backbuffer[(uint32_t)py * buffer_pitch_pixels + (uint32_t)x];
-        volatile uint8_t* dst = f->address + (uint32_t)py * f->pitch + (uint32_t)x * 4u;
-        for (int px = 0; px < width * 4; ++px) dst[px] = src[px];
+        const uint32_t* src = &backbuffer[(uint32_t)py * buffer_pitch_pixels + (uint32_t)x];
+        volatile uint32_t* dst = (volatile uint32_t*)(f->address + (uint32_t)py * f->pitch + (uint32_t)x * 4u);
+        for (int px = 0; px < width; ++px) dst[px] = src[px];
     }
 }
 

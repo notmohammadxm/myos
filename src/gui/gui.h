@@ -27,6 +27,11 @@ void gui_redraw(void);
 void gui_present(void);
 void gui_mouse_event(int dx, int dy, int wheel, uint8_t buttons);
 void gui_set_runtime_ticks(uint32_t ticks);
+void gui_set_clock(int hour, int minute, int second, int day, int month, int year);
+void gui_open_window(int index);
+#ifdef UNIT_TEST
+int gui_test_calculate(const char* expression, int32_t* result);
+#endif
 int gui_take_terminal_cursor(int* cursor_pos);
 int gui_poll_action(gui_action_t* action);
 

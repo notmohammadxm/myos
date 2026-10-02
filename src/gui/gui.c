@@ -9,12 +9,18 @@
 #define TERM_COLS 96
 #define TERM_ROWS 48
 #define TERM_PAD 14
-#define TOPBAR_H 54
-#define FOOTER_H 72
-#define TITLE_H 38
+#define TOPBAR_H 62
+#define FOOTER_H 84
+#define TITLE_H 42
 #define MIN_WINDOW_W 300
 #define MIN_WINDOW_H 220
 #define WINDOW_COUNT 5
+#define DOCK_W 700
+#define DOCK_H 64
+#define DOCK_CELL_W 112
+#define DOCK_Y_FROM_BOTTOM 76
+#define LAUNCHER_W 320
+#define LAUNCHER_H 292
 struct gui_window {
     int x, y, w, h;
     int dragging;
@@ -41,13 +47,23 @@ static int mouse_y_pos;
 static uint8_t mouse_prev_buttons;
 static int focused_window;
 static uint32_t runtime_ticks;
+static int clock_hour;
+static int clock_minute;
+static int clock_second;
+static int clock_day;
+static int clock_month;
+static int clock_year;
+static int clock_valid;
 static int dock_hot = -1;
+static int launcher_open;
 static int notification_open = 1;
 static int notifications_enabled = 1;
 static int animations_enabled = 1;
 static int power_open;
 static char calc_display[32] = "0";
 static int calc_has_value;
+static int calc_replace_next;
+static int calc_error;
 static int term_view_top;
 static int term_view_rows;
 static int cursor_request_pending;
@@ -63,11 +79,11 @@ static int window_order[WINDOW_COUNT] = { 1, 2, 3, 4, 0 };
 static void gui_request_redraw(void);
 static void gui_request_terminal_redraw(void);
 static struct gui_window windows[WINDOW_COUNT] = {
-    { 28, 104, 650, 500, 0, 0, 0, 1, 0 },
-    { 704, 94, 290, 254, 0, 0, 0, 1, 0 },
-    { 704, 372, 290, 246, 0, 0, 0, 1, 0 },
-    { 330, 170, 360, 390, 0, 0, 0, 0, 0 },
-    { 250, 150, 500, 420, 0, 0, 0, 0, 0 }
+    { 24, 92, 620, 526, 0, 0, 0, 1, 0 },
+    { 666, 92, 334, 238, 0, 0, 0, 1, 0 },
+    { 666, 344, 334, 238, 0, 0, 0, 1, 0 },
+    { 236, 132, 390, 410, 0, 0, 0, 0, 0 },
+    { 552, 152, 390, 410, 0, 0, 0, 0, 0 }
 };
 
 static int min_int(int a, int b) { return a < b ? a : b; }
@@ -197,134 +213,181 @@ static void layout_windows(void) {
     const framebuffer_info_t* f = framebuffer_info();
     int screen_w = (int)f->width;
     int screen_h = (int)f->height;
-    int side_w = 306;
-    int gap = 24;
+    int side_w = 334;
+    int gap = 14;
 
-    windows[0].x = 28;
-    windows[0].y = 104;
-    windows[0].w = max_int(MIN_WINDOW_W, screen_w - side_w - 82);
-    windows[0].h = max_int(MIN_WINDOW_H, screen_h - TOPBAR_H - FOOTER_H - 48);
+    windows[0].x = 24;
+    windows[0].y = TOPBAR_H + 30;
+    windows[0].w = max_int(MIN_WINDOW_W, screen_w - side_w - 66);
+    windows[0].h = max_int(MIN_WINDOW_H, screen_h - TOPBAR_H - FOOTER_H - 42);
 
     windows[1].x = screen_w - side_w - 24;
-    windows[1].y = 94;
+    windows[1].y = TOPBAR_H + 30;
     windows[1].w = side_w;
-    windows[1].h = 246;
+    windows[1].h = 238;
 
     windows[2].x = screen_w - side_w - 24;
     windows[2].y = windows[1].y + windows[1].h + gap;
     windows[2].w = side_w;
-    windows[2].h = max_int(220, screen_h - windows[2].y - FOOTER_H - 12);
+    windows[2].h = 238;
 
-    windows[3].x = (screen_w - 360) / 2;
+    windows[3].x = 228;
     windows[3].y = TOPBAR_H + 78;
-    windows[3].w = 360;
-    windows[3].h = 390;
+    windows[3].w = 390;
+    windows[3].h = 410;
+
+    windows[4].x = max_int(360, screen_w / 2 + 40);
+    windows[4].y = TOPBAR_H + 100;
+    windows[4].w = 390;
+    windows[4].h = 410;
 
     for (int i = 0; i < WINDOW_COUNT; ++i) clamp_window(&windows[i]);
 }
 
+
 static void draw_icon_terminal(int x, int y, uint32_t c) {
-    renderer_border(x, y, 20, 16, 2, c);
-    renderer_line(x + 5, y + 5, x + 9, y + 8, c);
-    renderer_line(x + 9, y + 8, x + 5, y + 11, c);
-    renderer_line(x + 11, y + 11, x + 16, y + 11, c);
+    renderer_rect(x, y, 24, 18, bg);
+    renderer_border(x, y, 24, 18, 2, c);
+    renderer_line(x + 5, y + 5, x + 9, y + 9, c);
+    renderer_line(x + 9, y + 9, x + 5, y + 13, c);
+    renderer_line(x + 12, y + 13, x + 19, y + 13, c);
 }
 
 static void draw_icon_system(int x, int y, uint32_t c) {
-    renderer_border(x, y, 20, 16, 2, c);
-    renderer_line(x + 4, y + 5, x + 16, y + 5, c);
-    renderer_line(x + 4, y + 8, x + 16, y + 8, c);
-    renderer_line(x + 4, y + 11, x + 16, y + 11, c);
+    renderer_rect(x, y, 24, 18, bg);
+    renderer_border(x, y, 24, 18, 2, c);
+    renderer_rect(x + 4, y + 4, 16, 2, c);
+    renderer_rect(x + 4, y + 8, 16, 2, c);
+    renderer_rect(x + 4, y + 12, 10, 2, c);
 }
 
 static void draw_icon_settings(int x, int y, uint32_t c) {
-    renderer_border(x + 7, y + 1, 6, 14, 2, c);
-    renderer_border(x + 1, y + 6, 18, 4, 2, c);
+    renderer_rect(x, y, 24, 18, bg);
+    renderer_border(x + 8, y + 1, 8, 16, 1, c);
+    renderer_border(x + 1, y + 6, 22, 5, 1, c);
+    renderer_rect(x + 11, y + 7, 4, 3, c);
+}
+
+static void draw_icon_calculator(int x, int y, uint32_t c) {
+    renderer_border(x + 3, y, 18, 18, 2, c);
+    renderer_rect(x + 6, y + 3, 12, 3, c);
+    renderer_rect(x + 6, y + 9, 3, 3, c);
+    renderer_rect(x + 12, y + 9, 3, 3, c);
+    renderer_rect(x + 18, y + 9, 3, 3, c);
+    renderer_rect(x + 6, y + 14, 3, 3, c);
+}
+
+static void draw_icon_monitor(int x, int y, uint32_t c) {
+    renderer_border(x + 2, y, 20, 14, 2, c);
+    renderer_line(x + 6, y + 11, x + 9, y + 7, c);
+    renderer_line(x + 9, y + 7, x + 12, y + 9, c);
+    renderer_line(x + 12, y + 9, x + 17, y + 4, c);
+    renderer_line(x + 11, y + 14, x + 11, y + 18, c);
+    renderer_line(x + 7, y + 18, x + 15, y + 18, c);
 }
 
 static void draw_icon_power(int x, int y, uint32_t c) {
-    renderer_line(x + 10, y + 1, x + 10, y + 8, c);
-    renderer_rect(x + 5, y + 8, 10, 2, c);
-    renderer_line(x + 5, y + 9, x + 4, y + 11, c);
-    renderer_line(x + 4, y + 11, x + 6, y + 14, c);
-    renderer_line(x + 6, y + 14, x + 10, y + 15, c);
-    renderer_line(x + 10, y + 15, x + 14, y + 14, c);
-    renderer_line(x + 14, y + 14, x + 16, y + 11, c);
-    renderer_line(x + 16, y + 11, x + 15, y + 9, c);
+    renderer_line(x + 12, y + 1, x + 12, y + 8, c);
+    renderer_line(x + 6, y + 6, x + 4, y + 9, c);
+    renderer_line(x + 4, y + 9, x + 4, y + 13, c);
+    renderer_line(x + 4, y + 13, x + 7, y + 16, c);
+    renderer_line(x + 7, y + 16, x + 12, y + 18, c);
+    renderer_line(x + 12, y + 18, x + 17, y + 16, c);
+    renderer_line(x + 17, y + 16, x + 20, y + 13, c);
+    renderer_line(x + 20, y + 13, x + 20, y + 9, c);
+    renderer_line(x + 20, y + 9, x + 18, y + 6, c);
 }
 
 static void draw_window_controls(const struct gui_window* w) {
-    int y = w->y + 14;
-    int min_x = w->x + w->w - 61;
-    int max_x = w->x + w->w - 38;
-    int close_x = w->x + w->w - 20;
-    renderer_line(min_x, y + 5, min_x + 9, y + 5, muted);
-    renderer_border(max_x, y + 1, 9, 9, 1, muted);
-    renderer_line(close_x - 3, y + 1, close_x + 5, y + 9, danger);
-    renderer_line(close_x + 5, y + 1, close_x - 3, y + 9, danger);
+    int cy = w->y + 20;
+    int min_x = w->x + w->w - 62;
+    int close_x = w->x + w->w - 24;
+    renderer_rect(min_x - 5, cy - 5, 14, 14, warning);
+    renderer_rect(close_x - 5, cy - 5, 14, 14, danger);
+    renderer_line(close_x - 2, cy - 2, close_x + 2, cy + 2, bg);
+    renderer_line(close_x + 2, cy - 2, close_x - 2, cy + 2, bg);
+    renderer_rect(w->x + 15, w->y + 17, 10, 6, accent);
 }
 
 static void draw_window(const struct gui_window* w, const char* title, int index) {
     if (!w->visible || w->minimized) return;
     uint32_t line = index == focused_window ? accent : border;
+    renderer_rect(w->x + 5, w->y + 6, w->w, w->h, bg);
     renderer_rect(w->x, w->y, w->w, w->h, panel);
     renderer_border(w->x, w->y, w->w, w->h, 1, line);
     renderer_rect(w->x + 1, w->y + 1, w->w - 2, TITLE_H - 1, panel2);
-    renderer_rect(w->x + 12, w->y + 13, 8, 8, index == focused_window ? accent : muted);
-    draw_text(w->x + 28, w->y + 12, title, text);
+    renderer_rect(w->x + 1, w->y + 1, w->w - 2, 3, line);
+    draw_text(w->x + 32, w->y + 14, title, text);
+    if (index == focused_window) draw_text(w->x + 32, w->y + 28, "ACTIVE", accent);
     draw_window_controls(w);
 }
 
 static void draw_sysinfo(const struct gui_window* w) {
     if (!w->visible || w->minimized) return;
-    int y = w->y + TITLE_H + 22;
-    draw_text(w->x + 16, y, "SYSTEM", muted);
-    draw_text(w->x + 16, y + 22, "MYOS V0.5", text);
-    draw_text(w->x + 158, y, "KERNEL", muted);
-    draw_text(w->x + 158, y + 22, "I386", text);
-
-    y += 62;
-    draw_text(w->x + 16, y, "CPU", muted);
-    renderer_rect(w->x + 16, y + 18, w->w - 32, 8, bg);
-    renderer_rect(w->x + 16, y + 18, (w->w - 32) / 9, 8, accent);
-    draw_text(w->x + 16, y + 34, "7% ACTIVE", success);
-
-    y += 66;
-    draw_text(w->x + 16, y, "MEMORY", muted);
-    renderer_rect(w->x + 16, y + 18, w->w - 32, 8, bg);
-    renderer_rect(w->x + 16, y + 18, (w->w - 32) / 3, 8, accent);
-    draw_text(w->x + 16, y + 34, "28% USED", text);
-
-    y += 66;
-    draw_text(w->x + 16, y, "HARDWARE", muted);
-    draw_text(w->x + 16, y + 22, "FRAMEBUFFER", success);
-    draw_text(w->x + 158, y + 22, "PS2 MOUSE", success);
+    const framebuffer_info_t* f = framebuffer_info();
+    int x = w->x + 18;
+    int y = w->y + TITLE_H + 18;
+    draw_text(x, y, "SYSTEM", muted);
+    draw_text(x + 112, y, "MYOS 0.5", text);
+    y += 30;
+    draw_text(x, y, "KERNEL", muted);
+    draw_text(x + 112, y, "I386 / MULTIBOOT2", text);
+    y += 30;
+    draw_text(x, y, "DISPLAY", muted);
+    if (f) {
+        char mode[20];
+        int mw=(int)f->width, mh=(int)f->height;
+        mode[0]=(char)('0'+(mw/1000)%10); mode[1]=(char)('0'+(mw/100)%10); mode[2]=(char)('0'+(mw/10)%10); mode[3]=(char)('0'+mw%10);
+        mode[4]='x'; mode[5]=(char)('0'+(mh/1000)%10); mode[6]=(char)('0'+(mh/100)%10); mode[7]=(char)('0'+(mh/10)%10); mode[8]=(char)('0'+mh%10);
+        mode[9]=' '; mode[10]='3'; mode[11]='2'; mode[12]='b'; mode[13]='p'; mode[14]='p'; mode[15]=0;
+        draw_text(x + 112, y, mode, success);
+    }
+    y += 30;
+    draw_text(x, y, "INPUT", muted);
+    draw_text(x + 112, y, "PS2 MOUSE + KEYBOARD", success);
+    y += 30;
+    draw_text(x, y, "BOOT", muted);
+    draw_text(x + 112, y, "GRAPHICS ONLINE", success);
+    y += 30;
+    draw_text(x, y, "STATUS", muted);
+    draw_text(x + 112, y, "ALL CORE SERVICES READY", success);
+    renderer_rect(x, y + 28, w->w - 36, 4, bg);
+    renderer_rect(x, y + 28, w->w - 82, 4, success);
+    draw_text(x, y + 42, "STABLE UI / PARTIAL PRESENT", accent);
 }
 
 static void draw_toggle(int x, int y, int on) {
-    renderer_rect(x, y, 48, 20, on ? accent : border);
-    renderer_rect(x + (on ? 28 : 4), y + 4, 12, 12, on ? bg : muted);
+    renderer_rect(x, y, 58, 22, on ? accent : border);
+    renderer_border(x, y, 58, 22, 1, on ? accent : border);
+    renderer_rect(x + (on ? 38 : 4), y + 4, 14, 14, on ? bg : muted);
 }
 
 static void draw_settings(const struct gui_window* w) {
     if (!w->visible || w->minimized) return;
+    int x = w->x + 18;
     int y = w->y + TITLE_H + 20;
-    draw_text(w->x + 16, y, "THEME", muted);
-    draw_text(w->x + 16, y + 22, theme_name, text);
-    renderer_border(w->x + w->w - 62, y - 3, 46, 30, 1, border);
-    draw_text(w->x + w->w - 47, y + 6, ">", accent);
+    draw_text(x, y, "THEME", muted);
+    draw_text(x + 94, y, theme_name, text);
+    renderer_border(w->x + w->w - 72, y - 5, 54, 30, 1, accent);
+    draw_text(w->x + w->w - 55, y + 3, ">", accent);
 
-    y += 66;
-    draw_text(w->x + 16, y, "NOTIFICATIONS", muted);
-    draw_toggle(w->x + w->w - 64, y - 3, notifications_enabled);
+    y += 46;
+    draw_text(x, y, "NOTIFICATIONS", muted);
+    draw_toggle(w->x + w->w - 80, y - 5, notifications_enabled);
+    draw_text(w->x + w->w - 142, y + 2, notifications_enabled ? "ON" : "OFF", notifications_enabled ? success : muted);
 
-    y += 48;
-    draw_text(w->x + 16, y, "ANIMATIONS", muted);
-    draw_toggle(w->x + w->w - 64, y - 3, animations_enabled);
+    y += 42;
+    draw_text(x, y, "ANIMATIONS", muted);
+    draw_toggle(w->x + w->w - 80, y - 5, animations_enabled);
+    draw_text(w->x + w->w - 142, y + 2, animations_enabled ? "ON" : "OFF", animations_enabled ? success : muted);
 
-    y += 48;
-    draw_text(w->x + 16, y, "SESSION", muted);
-    draw_text(w->x + 16, y + 22, "NOT PERSISTED", accent);
+    y += 42;
+    draw_text(x, y, "POINTER", muted);
+    draw_text(x + 94, y, "PS2 OPTIMIZED", success);
+
+    y += 38;
+    draw_text(x, y, "SESSION", muted);
+    draw_text(x + 94, y, "LIVE / NON-PERSISTENT", accent);
 }
 
 static void draw_monitor(const struct gui_window* w) {
@@ -332,100 +395,144 @@ static void draw_monitor(const struct gui_window* w) {
     const framebuffer_info_t* f = framebuffer_info();
     int x = w->x + 18, y = w->y + TITLE_H + 18;
     uint32_t sec = runtime_ticks / 100u;
-    int min = (int)(sec / 60u);
-    int hour = min / 60;
-    min %= 60;
-    int s = (int)(sec % 60u);
+    uint32_t mins_total = sec / 60u;
+    uint32_t hours = mins_total / 60u;
+    uint32_t mins = mins_total % 60u;
+    uint32_t secs = sec % 60u;
+    char uptime[12];
+    uptime[0]=(char)('0'+(hours/10u)%10u); uptime[1]=(char)('0'+hours%10u); uptime[2]=':';
+    uptime[3]=(char)('0'+(mins/10u)%10u); uptime[4]=(char)('0'+mins%10u); uptime[5]=':';
+    uptime[6]=(char)('0'+(secs/10u)); uptime[7]=(char)('0'+secs%10u); uptime[8]=0;
 
-    draw_text(x, y, "SYSTEM MONITOR", accent);
-    draw_text(x, y + 28, "UPTIME", muted);
-    draw_text(x + 88, y + 28, "00:00:00", text);
-    /* Render HH:MM:SS without sprintf/libc. */
-    char clock[9];
-    clock[0] = (char)('0' + (hour / 10) % 10); clock[1] = (char)('0' + hour % 10);
-    clock[2] = ':'; clock[3] = (char)('0' + min / 10); clock[4] = (char)('0' + min % 10);
-    clock[5] = ':'; clock[6] = (char)('0' + s / 10); clock[7] = (char)('0' + s % 10); clock[8] = 0;
-    draw_text(x + 88, y + 28, clock, text);
+    draw_text(x, y, "LIVE MONITOR", accent);
+    draw_text(x, y + 30, "UPTIME", muted);
+    draw_text(x + 94, y + 30, uptime, text);
+    draw_text(x, y + 58, "CLOCK", muted);
+    if (clock_valid) {
+        char t[9];
+        t[0]=(char)('0'+clock_hour/10); t[1]=(char)('0'+clock_hour%10); t[2]=':';
+        t[3]=(char)('0'+clock_minute/10); t[4]=(char)('0'+clock_minute%10); t[5]=':';
+        t[6]=(char)('0'+clock_second/10); t[7]=(char)('0'+clock_second%10); t[8]=0;
+        draw_text(x + 94, y + 58, t, success);
+    } else draw_text(x + 94, y + 58, "--:--:--", warning);
 
-    draw_text(x, y + 62, "FRAMEBUFFER", muted);
-    if (f) {
-        char mode[24]; int mw = (int)f->width, mh = (int)f->height;
-        mode[0]=(char)('0'+(mw/1000)%10); mode[1]=(char)('0'+(mw/100)%10); mode[2]=(char)('0'+(mw/10)%10); mode[3]=(char)('0'+mw%10);
-        mode[4]='x'; mode[5]=(char)('0'+(mh/1000)%10); mode[6]=(char)('0'+(mh/100)%10); mode[7]=(char)('0'+(mh/10)%10); mode[8]=(char)('0'+mh%10);
-        mode[9]=' '; mode[10]='3'; mode[11]='2'; mode[12]='b'; mode[13]='p'; mode[14]='p'; mode[15]=0;
-        draw_text(x + 88, y + 62, mode, success);
-    }
-
-    draw_text(x, y + 96, "MOUSE", muted);
-    char pos[32];
-    pos[0]='X'; pos[1]=':'; pos[2]=' ';
+    draw_text(x, y + 86, "CURSOR", muted);
+    char pos[18];
     int mx=mouse_x_pos, my=mouse_y_pos;
-    pos[3]=(char)('0'+(mx/1000)%10); pos[4]=(char)('0'+(mx/100)%10); pos[5]=(char)('0'+(mx/10)%10); pos[6]=(char)('0'+mx%10);
-    pos[7]=' '; pos[8]='Y'; pos[9]=':'; pos[10]=' ';
-    pos[11]=(char)('0'+(my/1000)%10); pos[12]=(char)('0'+(my/100)%10); pos[13]=(char)('0'+(my/10)%10); pos[14]=(char)('0'+my%10); pos[15]=0;
-    draw_text(x + 88, y + 96, pos, text);
+    pos[0]=(char)('0'+(mx/1000)%10); pos[1]=(char)('0'+(mx/100)%10); pos[2]=(char)('0'+(mx/10)%10); pos[3]=(char)('0'+mx%10);
+    pos[4]=','; pos[5]=' '; pos[6]=(char)('0'+(my/1000)%10); pos[7]=(char)('0'+(my/100)%10); pos[8]=(char)('0'+(my/10)%10); pos[9]=(char)('0'+my%10); pos[10]=0;
+    draw_text(x + 94, y + 86, pos, text);
 
-    draw_text(x, y + 130, "INPUT", muted);
-    draw_text(x + 88, y + 130, mouse_prev_buttons ? "MOUSE ACTIVE" : "IDLE", mouse_prev_buttons ? success : text);
-
-    renderer_rect(x, y + 166, w->w - 36, 1, border);
-    draw_text(x, y + 186, "KERNEL SERVICES", accent);
-    const char* services[6] = { "IRQ0 TIMER", "IRQ1 KEYBOARD", "IRQ12 MOUSE", "FRAMEBUFFER", "GUI EVENT LOOP", "SHELL BACKEND" };
-    for (int i = 0; i < 6; ++i) {
-        int yy = y + 214 + i * 25;
-        renderer_rect(x, yy + 3, 8, 8, success);
-        draw_text(x + 18, yy, services[i], text);
-        draw_text(x + w->w - 92, yy, "READY", success);
+    draw_text(x, y + 114, "RENDER", muted);
+    draw_text(x + 94, y + 114, "DIRTY + CLIPPED", success);
+    if (f) {
+        draw_text(x, y + 142, "MODE", muted);
+        draw_text(x + 94, y + 142, "32BPP FRAMEBUFFER", text);
     }
+    renderer_rect(x, y + 166, w->w - 36, 1, border);
+    draw_text(x, y + 182, "SERVICES", accent);
+    const char* services[4] = { "TIMER", "KEYBOARD", "PS2 MOUSE", "GUI LOOP" };
+    for (int i = 0; i < 4; ++i) {
+        int yy = y + 210 + i * 22;
+        renderer_rect(x, yy + 3, 7, 7, success);
+        draw_text(x + 16, yy, services[i], text);
+        draw_text(x + w->w - 74, yy, "READY", success);
+    }
+}
+
+static void make_clock_text(char out[9]) {
+    if (!out) return;
+    if (!clock_valid) {
+        gui_strcopy(out, "--:--:--", 9);
+        return;
+    }
+    out[0]=(char)('0'+clock_hour/10); out[1]=(char)('0'+clock_hour%10); out[2]=':';
+    out[3]=(char)('0'+clock_minute/10); out[4]=(char)('0'+clock_minute%10); out[5]=':';
+    out[6]=(char)('0'+clock_second/10); out[7]=(char)('0'+clock_second%10); out[8]=0;
 }
 
 static void draw_desktop_chrome(void) {
     const framebuffer_info_t* f = framebuffer_info();
     int w = (int)f->width;
     int h = (int)f->height;
+    char clock[9];
+    make_clock_text(clock);
 
     renderer_rect(0, 0, w, h, bg);
     renderer_rect(0, 0, w, TOPBAR_H, panel2);
     renderer_rect(0, h - FOOTER_H, w, FOOTER_H, panel2);
-    renderer_rect(0, TOPBAR_H, 5, h - TOPBAR_H - FOOTER_H, accent);
+    renderer_rect(0, TOPBAR_H, 4, h - TOPBAR_H - FOOTER_H, accent);
+    renderer_rect(0, TOPBAR_H, w, 1, border);
+    renderer_rect(0, h - FOOTER_H, w, 1, border);
 
-    draw_text(22, 16, "MYOS", accent);
-    draw_text(76, 16, "DESKTOP", muted);
-    draw_text(w - 176, 16, "CORE ONLINE", success);
-    draw_text(w - 90, 16, "10:42", text);
+    renderer_border(14, 11, 52, 38, 1, launcher_open ? accent : border);
+    draw_text(25, 15, "OS", accent);
+    draw_text(25, 31, "MENU", muted);
+    draw_text(80, 15, "MYOS", accent);
+    draw_text(134, 15, "DESKTOP", muted);
 
-    /* Notification bell target. */
-    int bx = w - 32;
-    int by = 13;
-    renderer_border(bx - 12, by - 2, 19, 22, 1, notification_open ? accent : border);
-    renderer_rect(bx - 8, by + 4, 11, 8, notification_open ? accent : muted);
-    renderer_rect(bx - 5, by + 13, 5, 2, notification_open ? accent : muted);
-
-    /* Dock. */
-    int dock_w = 584;
-    int dock_h = 54;
-    int dock_x = (w - dock_w) / 2;
-    int dock_y = h - 62;
-    renderer_rect(dock_x, dock_y, dock_w, dock_h, panel);
-    renderer_border(dock_x, dock_y, dock_w, dock_h, 1, border);
-
-    const char* names[6] = { "TERM", "SYSTEM", "SETTINGS", "CALC", "MONITOR", "POWER" };
-    for (int i = 0; i < 6; ++i) {
-        int cell_x = dock_x + 7 + i * 96;
-        uint32_t c = dock_hot == i ? accent : muted;
-        renderer_rect(cell_x, dock_y + 6, 88, 42, i == dock_hot ? panel2 : bg);
-        renderer_border(cell_x, dock_y + 6, 88, 42, 1, c);
-        if (i == 0) draw_icon_terminal(cell_x + 8, dock_y + 17, c);
-        if (i == 1) draw_icon_system(cell_x + 8, dock_y + 17, c);
-        if (i == 2) draw_icon_settings(cell_x + 8, dock_y + 17, c);
-        if (i == 3) { draw_icon_settings(cell_x + 8, dock_y + 17, c); }
-        if (i == 4) draw_icon_system(cell_x + 8, dock_y + 17, c);
-        if (i == 5) draw_icon_power(cell_x + 8, dock_y + 17, c);
-        draw_text(cell_x + 34, dock_y + 20, names[i], c);
+    draw_text(w - 270, 14, "CORE ONLINE", success);
+    draw_text(w - 134, 14, clock, text);
+    if (clock_valid) {
+        char date[12];
+        date[0]=(char)('0'+(clock_day/10)%10); date[1]=(char)('0'+clock_day%10); date[2]='/';
+        date[3]=(char)('0'+(clock_month/10)%10); date[4]=(char)('0'+clock_month%10); date[5]='/';
+        date[6]=(char)('0'+(clock_year/1000)%10); date[7]=(char)('0'+(clock_year/100)%10);
+        date[8]=(char)('0'+(clock_year/10)%10); date[9]=(char)('0'+clock_year%10); date[10]=0;
+        draw_text(w - 134, 34, date, muted);
     }
 
-    draw_text(20, h - 38, "MYOS CORE", text);
-    draw_text(w - 116, h - 38, "SESSION", muted);
+    /* Notification button. */
+    int bx = w - 34, by = 21;
+    renderer_border(bx - 10, by - 8, 22, 25, 1, notification_open ? accent : border);
+    renderer_rect(bx - 5, by - 1, 11, 10, notification_open ? accent : muted);
+    renderer_rect(bx - 2, by + 10, 5, 2, notification_open ? accent : muted);
+
+    /* Dock. Wide cells keep long labels such as SETTINGS inside the tile. */
+    int dock_x = (w - DOCK_W) / 2;
+    int dock_y = h - DOCK_Y_FROM_BOTTOM;
+    renderer_rect(dock_x + 5, dock_y + 5, DOCK_W, DOCK_H, bg);
+    renderer_rect(dock_x, dock_y, DOCK_W, DOCK_H, panel);
+    renderer_border(dock_x, dock_y, DOCK_W, DOCK_H, 1, border);
+    const char* names[6] = { "TERM", "SYSTEM", "SETTINGS", "CALC", "MONITOR", "POWER" };
+    for (int i = 0; i < 6; ++i) {
+        int cell_x = dock_x + 8 + i * DOCK_CELL_W;
+        uint32_t c = dock_hot == i ? accent : muted;
+        renderer_rect(cell_x, dock_y + 7, DOCK_CELL_W - 6, DOCK_H - 14, i == dock_hot ? panel2 : bg);
+        renderer_border(cell_x, dock_y + 7, DOCK_CELL_W - 6, DOCK_H - 14, 1, c);
+        if (i == 0) draw_icon_terminal(cell_x + 9, dock_y + 23, c);
+        if (i == 1) draw_icon_system(cell_x + 9, dock_y + 23, c);
+        if (i == 2) draw_icon_settings(cell_x + 9, dock_y + 23, c);
+        if (i == 3) draw_icon_calculator(cell_x + 9, dock_y + 23, c);
+        if (i == 4) draw_icon_monitor(cell_x + 9, dock_y + 23, c);
+        if (i == 5) draw_icon_power(cell_x + 9, dock_y + 23, c);
+        draw_text(cell_x + 40, dock_y + 25, names[i], c);
+    }
+
+    draw_text(20, h - 35, "MYOS CORE", text);
+    draw_text(116, h - 35, "GUI READY", success);
+    draw_text(w - 142, h - 35, "MOVE WINDOWS", muted);
+    draw_text(w - 36, h - 35, "", text);
+}
+
+static void draw_launcher(void) {
+    if (!launcher_open) return;
+    renderer_rect(20, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H, bg);
+    renderer_rect(14, TOPBAR_H + 2, LAUNCHER_W, LAUNCHER_H, panel);
+    renderer_border(14, TOPBAR_H + 2, LAUNCHER_W, LAUNCHER_H, 1, accent);
+    draw_text(30, TOPBAR_H + 18, "MYOS APPLICATIONS", accent);
+    draw_text(30, TOPBAR_H + 36, "Select a core utility", muted);
+
+    const char* names[5] = { "Terminal", "System Information", "Settings", "Calculator", "System Monitor" };
+    const char* desc[5] = { "Shell and command center", "Hardware and display", "Theme and session", "Fast integer math", "Live runtime status" };
+    for (int i = 0; i < 5; ++i) {
+        int y = TOPBAR_H + 50 + i * 44;
+        uint32_t c = (i == dock_hot) ? accent : text;
+        renderer_rect(28, y, LAUNCHER_W - 28, 38, i == dock_hot ? panel2 : bg);
+        renderer_border(28, y, LAUNCHER_W - 28, 38, 1, border);
+        draw_text(42, y + 7, names[i], c);
+        draw_text(42, y + 23, desc[i], muted);
+    }
 }
 
 static void draw_terminal_surface(const struct gui_window* w) {
@@ -488,57 +595,234 @@ static void terminal_scroll_buffer(void) {
     term_view_top = max_int(0, term_view_top - 1);
 }
 
+static int calc_is_space(char c) { return c == ' ' || c == '\t'; }
+
+static void calc_skip(const char** p) {
+    while (**p && calc_is_space(**p)) ++*p;
+}
+
+static int32_t calc_add_safe(int32_t a, int32_t b, int* error) {
+    int64_t v = (int64_t)a + b;
+    if (v < -2147483648LL || v > 2147483647LL) { *error = 1; return 0; }
+    return (int32_t)v;
+}
+
+static int32_t calc_sub_safe(int32_t a, int32_t b, int* error) {
+    int64_t v = (int64_t)a - b;
+    if (v < -2147483648LL || v > 2147483647LL) { *error = 1; return 0; }
+    return (int32_t)v;
+}
+
+static int32_t calc_mul_safe(int32_t a, int32_t b, int* error) {
+    int64_t v = (int64_t)a * b;
+    if (v < -2147483648LL || v > 2147483647LL) { *error = 1; return 0; }
+    return (int32_t)v;
+}
+
+static int32_t calc_parse_expr(const char** p, int* error);
+
+static int32_t calc_parse_number(const char** p, int* error) {
+    calc_skip(p);
+    int neg = 0;
+    if (**p == '+' || **p == '-') { neg = **p == '-'; ++*p; calc_skip(p); }
+    if (**p < '0' || **p > '9') { *error = 1; return 0; }
+    int64_t value = 0;
+    while (**p >= '0' && **p <= '9') {
+        value = value * 10 + (**p - '0');
+        if (value > 2147483648LL) { *error = 1; return 0; }
+        ++*p;
+    }
+    if (neg) value = -value;
+    if (value < -2147483648LL || value > 2147483647LL) { *error = 1; return 0; }
+    return (int32_t)value;
+}
+
+static int32_t calc_parse_factor(const char** p, int* error) {
+    calc_skip(p);
+    if (**p == '(') {
+        ++*p;
+        int32_t v = calc_parse_expr(p, error);
+        calc_skip(p);
+        if (**p != ')') { *error = 1; return 0; }
+        ++*p;
+        return v;
+    }
+    return calc_parse_number(p, error);
+}
+
+static int32_t calc_parse_term(const char** p, int* error) {
+    int32_t result = calc_parse_factor(p, error);
+    if (*error) return 0;
+    for (;;) {
+        calc_skip(p);
+        char op = **p;
+        if (op != '*' && op != '/' && op != '%') break;
+        ++*p;
+        int32_t rhs = calc_parse_factor(p, error);
+        if (*error) return 0;
+        if ((op == '/' || op == '%') && rhs == 0) { *error = 1; return 0; }
+        if (op == '*') result = calc_mul_safe(result, rhs, error);
+        else if (op == '/') {
+            if (result == -2147483648LL && rhs == -1) { *error = 1; return 0; }
+            result /= rhs;
+        } else {
+            if (result == -2147483648LL && rhs == -1) { result = 0; }
+            else result %= rhs;
+        }
+        if (*error) return 0;
+    }
+    return result;
+}
+
+static int32_t calc_parse_expr(const char** p, int* error) {
+    int32_t result = calc_parse_term(p, error);
+    if (*error) return 0;
+    for (;;) {
+        calc_skip(p);
+        char op = **p;
+        if (op != '+' && op != '-') break;
+        ++*p;
+        int32_t rhs = calc_parse_term(p, error);
+        if (*error) return 0;
+        result = op == '+' ? calc_add_safe(result, rhs, error) : calc_sub_safe(result, rhs, error);
+        if (*error) return 0;
+    }
+    return result;
+}
+
+static void calc_set_result(int32_t value) {
+    char buf[32];
+    int pos = 0;
+    uint32_t v;
+    if (value < 0) { buf[pos++] = '-'; v = (uint32_t)(-(int64_t)value); }
+    else v = (uint32_t)value;
+    char rev[16]; int n = 0;
+    if (v == 0) rev[n++] = '0';
+    while (v && n < (int)sizeof(rev)) { rev[n++] = (char)('0' + (v % 10u)); v /= 10u; }
+    while (n > 0) buf[pos++] = rev[--n];
+    buf[pos] = 0;
+    gui_strcopy(calc_display, buf, (int)sizeof(calc_display));
+    calc_has_value = 1;
+    calc_replace_next = 1;
+    calc_error = 0;
+}
+
+static void calculator_evaluate(void) {
+    const char* p = calc_display;
+    int error = 0;
+    int32_t value = calc_parse_expr(&p, &error);
+    calc_skip(&p);
+    if (error || *p != 0) {
+        gui_strcopy(calc_display, "ERR", (int)sizeof(calc_display));
+        calc_error = 1;
+        calc_replace_next = 1;
+    } else {
+        calc_set_result(value);
+    }
+    gui_request_redraw();
+}
+
+static void calculator_backspace(void) {
+    size_t n = gui_strlen(calc_display);
+    if (calc_replace_next || calc_error || n <= 1) {
+        gui_strcopy(calc_display, "0", (int)sizeof(calc_display));
+        calc_has_value = 0; calc_replace_next = 0; calc_error = 0;
+        return;
+    }
+    calc_display[n - 1] = 0;
+    if (n == 2 && calc_display[0] == '-') gui_strcopy(calc_display, "0", (int)sizeof(calc_display));
+}
+
+
+#ifdef UNIT_TEST
+int gui_test_calculate(const char* expression, int32_t* result) {
+    if (!expression || !result) return 0;
+    const char* p = expression;
+    int error = 0;
+    int32_t value = calc_parse_expr(&p, &error);
+    calc_skip(&p);
+    if (error || *p != 0) return 0;
+    *result = value;
+    return 1;
+}
+#endif
+
 static void draw_calculator(const struct gui_window* w) {
     if (!w->visible || w->minimized) return;
-    int x = w->x + 18, y = w->y + TITLE_H + 18;
-    int bw = 70, bh = 48, gap = 8;
-    renderer_rect(w->x + 14, y, w->w - 28, 54, terminal_bg);
-    renderer_border(w->x + 14, y, w->w - 28, 54, 1, border);
-    draw_text(w->x + w->w - 28 - (int)gui_strlen(calc_display) * FONT_W, y + 18, calc_display, text);
-    const char* keys[16] = { "7","8","9","/","4","5","6","*","1","2","3","-","0",".","=","+" };
-    for (int i = 0; i < 16; ++i) {
+    int x = w->x + 18, y = w->y + TITLE_H + 16;
+    int bw = 78, bh = 48, gap = 8;
+    renderer_rect(w->x + 14, y, w->w - 28, 62, terminal_bg);
+    renderer_border(w->x + 14, y, w->w - 28, 62, 1, calc_error ? danger : border);
+    draw_text(w->x + 24, y + 9, calc_error ? "ERROR" : "READY", calc_error ? danger : success);
+    int disp_w = (int)gui_strlen(calc_display) * FONT_W;
+    draw_text(w->x + w->w - 28 - disp_w, y + 31, calc_display, text);
+
+    const char* keys[20] = {
+        "C","DEL","(",")",
+        "7","8","9","/",
+        "4","5","6","*",
+        "1","2","3","-",
+        "0","%","=","+"
+    };
+    for (int i = 0; i < 20; ++i) {
         int col = i % 4, row = i / 4;
         int bx = x + col * (bw + gap);
-        int by = y + 68 + row * (bh + gap);
+        int by = y + 76 + row * (bh + gap);
+        uint32_t c = (i == 18) ? accent : ((i == 0 || i == 1) ? danger : ((i == 3 || i == 7 || i == 11 || i == 15 || i == 19) ? warning : text));
         renderer_rect(bx, by, bw, bh, panel2);
-        renderer_border(bx, by, bw, bh, 1, i == 14 ? accent : border);
-        draw_text(bx + 28, by + 17, keys[i], i == 14 ? accent : text);
+        renderer_border(bx, by, bw, bh, 1, c);
+        int tw = (int)gui_strlen(keys[i]) * FONT_W;
+        draw_text(bx + (bw - tw) / 2, by + 17, keys[i], c);
     }
-    renderer_rect(x, y + 68 + 4 * (bh + gap), 4 * bw + 3 * gap, 34, panel2);
-    renderer_border(x, y + 68 + 4 * (bh + gap), 4 * bw + 3 * gap, 34, 1, danger);
-    draw_text(x + 150, y + 68 + 4 * (bh + gap) + 10, "CLEAR", danger);
+    draw_text(x, y + 76 + 5 * (bh + gap) - 2, "INTEGER EXPRESSIONS  |  +  -  *  /  %  ( )", muted);
 }
 
 static int point_in_calculator_key(int* key_index) {
     if (!key_index) return 0;
     const struct gui_window* w = &windows[3];
-    if (!inside_window(w, mouse_x_pos, mouse_y_pos)) return 0;
-    int x = w->x + 18, y = w->y + TITLE_H + 18 + 68;
-    int bw = 70, bh = 48, gap = 8;
+    int x = w->x + 18, y = w->y + TITLE_H + 16 + 76;
+    int bw = 78, bh = 48, gap = 8;
     int rx = mouse_x_pos - x, ry = mouse_y_pos - y;
-    if (rx < 0 || ry < 0) return 0;
+    if (!inside_window(w, mouse_x_pos, mouse_y_pos) || rx < 0 || ry < 0) return 0;
     int col = rx / (bw + gap), row = ry / (bh + gap);
-    if (col > 3 || row > 3) return 0;
+    if (col > 3 || row > 4) return 0;
     if ((rx % (bw + gap)) >= bw || (ry % (bh + gap)) >= bh) return 0;
     *key_index = row * 4 + col;
     return 1;
 }
 
-static void calculator_key(int index) {
-    const char* keys[16] = { "7","8","9","/","4","5","6","*","1","2","3","-","0",".","=","+" };
-    if (index < 0 || index >= 16) return;
-    if (index == 14) {
-        gui_strcopy(calc_display, "0", (int)sizeof(calc_display));
-        calc_has_value = 0;
-    } else if (index == 13) {
-        if (!calc_has_value && gui_strlen(calc_display) < (size_t)sizeof(calc_display)-1) {
-            size_t n = gui_strlen(calc_display); calc_display[n] = '.'; calc_display[n+1] = 0; calc_has_value = 1;
-        }
-    } else {
-        size_t n = gui_strlen(calc_display);
-        if (n == 1 && calc_display[0] == '0') n = 0;
-        if (n < (size_t)sizeof(calc_display)-1) { calc_display[n] = keys[index][0]; calc_display[n+1] = 0; }
+static void calculator_append_char(char c) {
+    size_t n = gui_strlen(calc_display);
+    if (calc_replace_next || calc_error || (n == 1 && calc_display[0] == '0')) {
+        n = 0;
+        calc_display[0] = 0;
+        calc_replace_next = 0;
+        calc_error = 0;
+    }
+    if (n < sizeof(calc_display) - 1) {
+        calc_display[n] = c;
+        calc_display[n + 1] = 0;
         calc_has_value = 1;
+    }
+}
+
+static void calculator_key(int index) {
+    const char* keys[20] = {
+        "C","DEL","(",")","7","8","9","/","4","5","6","*","1","2","3","-","0",".","=","+"
+    };
+    if (index < 0 || index >= 20) return;
+    if (index == 0) {
+        gui_strcopy(calc_display, "0", (int)sizeof(calc_display));
+        calc_has_value = 0; calc_replace_next = 0; calc_error = 0;
+    } else if (index == 1) {
+        calculator_backspace();
+    } else if (index == 18) {
+        calculator_evaluate();
+        return;
+    } else if (index == 17) {
+        calculator_append_char('%');
+    } else {
+        calculator_append_char(keys[index][0]);
     }
     gui_request_redraw();
 }
@@ -596,29 +880,42 @@ static void update_cursor_overlay(void) {
     cursor_drawn_valid = 1;
 }
 
+static int point_in_launcher_button(void) {
+    return mouse_x_pos >= 14 && mouse_x_pos < 66 && mouse_y_pos >= 11 && mouse_y_pos < 49;
+}
+
+static int point_in_launcher_item(int* item) {
+    if (!launcher_open || !item) return 0;
+    int top = TOPBAR_H + 50;
+    if (mouse_x_pos < 28 || mouse_x_pos >= 14 + LAUNCHER_W) return 0;
+    if (mouse_y_pos < top || mouse_y_pos >= top + 5 * 44) return 0;
+    *item = (mouse_y_pos - top) / 44;
+    if (*item < 0 || *item >= 5) return 0;
+    return 1;
+}
+
 static int title_control_at(const struct gui_window* w) {
     int rel_x = mouse_x_pos - w->x;
     if (mouse_y_pos < w->y || mouse_y_pos >= w->y + TITLE_H) return 0;
-    if (rel_x >= w->w - 32) return 2;
-    if (rel_x >= w->w - 68) return 1;
+    if (rel_x >= w->w - 38) return 2;
+    if (rel_x >= w->w - 76) return 1;
     return 0;
 }
 
 static int point_in_dock(int index) {
     const framebuffer_info_t* f = framebuffer_info();
-    int dock_w = 584;
-    int dock_x = ((int)f->width - dock_w) / 2;
-    int dock_y = (int)f->height - 62;
-    int x = dock_x + 7 + index * 96;
-    return mouse_x_pos >= x && mouse_x_pos < x + 88 &&
-           mouse_y_pos >= dock_y + 6 && mouse_y_pos < dock_y + 48;
+    int dock_x = ((int)f->width - DOCK_W) / 2;
+    int dock_y = (int)f->height - DOCK_Y_FROM_BOTTOM;
+    int x = dock_x + 8 + index * DOCK_CELL_W;
+    return mouse_x_pos >= x && mouse_x_pos < x + DOCK_CELL_W - 6 &&
+           mouse_y_pos >= dock_y + 7 && mouse_y_pos < dock_y + DOCK_H - 7;
 }
 
 static int point_in_notification_bell(void) {
     const framebuffer_info_t* f = framebuffer_info();
-    int bx = (int)f->width - 32;
-    return mouse_x_pos >= bx - 14 && mouse_x_pos < bx + 9 &&
-           mouse_y_pos >= 8 && mouse_y_pos < 39;
+    int bx = (int)f->width - 34;
+    return mouse_x_pos >= bx - 14 && mouse_x_pos < bx + 12 &&
+           mouse_y_pos >= 8 && mouse_y_pos < 54;
 }
 
 static int point_in_power_button(int which) {
@@ -633,14 +930,44 @@ static int point_in_power_button(int which) {
 static int point_in_settings_row(int row) {
     const struct gui_window* w = &windows[2];
     int y = w->y + TITLE_H + 20;
+    int row_h = 34;
+    if (row < 0 || row > 2) return 0;
     if (row == 0) return mouse_x_pos >= w->x + 8 && mouse_x_pos < w->x + w->w - 8 &&
-                         mouse_y_pos >= y - 8 && mouse_y_pos < y + 45;
-    y += 66;
+                         mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
+    y += 46;
     if (row == 1) return mouse_x_pos >= w->x + 8 && mouse_x_pos < w->x + w->w - 8 &&
-                         mouse_y_pos >= y - 8 && mouse_y_pos < y + 36;
-    y += 48;
+                         mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
+    y += 42;
     return mouse_x_pos >= w->x + 8 && mouse_x_pos < w->x + w->w - 8 &&
-           mouse_y_pos >= y - 8 && mouse_y_pos < y + 36;
+           mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
+}
+
+static void open_window(int index) {
+    if (index < 0 || index >= WINDOW_COUNT) return;
+    if (!windows[index].visible || windows[index].minimized) {
+        windows[index].minimized = 0;
+        windows[index].visible = 1;
+    }
+    promote_window(index);
+    launcher_open = 0;
+    power_open = 0;
+    gui_request_redraw();
+}
+
+void gui_open_window(int index) {
+    if (!ready) return;
+    open_window(index);
+}
+
+static void focus_next_visible(void) {
+    for (int i = WINDOW_COUNT - 1; i >= 0; --i) {
+        int idx = window_order[i];
+        if (windows[idx].visible && !windows[idx].minimized) {
+            focused_window = idx;
+            return;
+        }
+    }
+    focused_window = -1;
 }
 
 void gui_init(void) {
@@ -665,10 +992,17 @@ void gui_init(void) {
     mouse_prev_buttons = 0;
     focused_window = 0;
     dock_hot = -1;
+    launcher_open = 0;
     notification_open = 1;
     power_open = 0;
+    clock_hour = clock_minute = clock_second = 0;
+    clock_day = clock_month = 0;
+    clock_year = 0;
+    clock_valid = 0;
     gui_strcopy(calc_display, "0", (int)sizeof(calc_display));
     calc_has_value = 0;
+    calc_replace_next = 0;
+    calc_error = 0;
     action_head = action_tail = 0;
     cursor_request_pending = 0;
     cursor_drawn_x = cursor_drawn_y = 0;
@@ -849,6 +1183,7 @@ void gui_redraw(void) {
 
     draw_notification();
     draw_power_menu();
+    draw_launcher();
 }
 
 void gui_present(void) {
@@ -857,11 +1192,10 @@ void gui_present(void) {
         int px = dirty_x0, py = dirty_y0;
         int pw = dirty_x1 - dirty_x0, ph = dirty_y1 - dirty_y0;
         if (cursor_drawn_valid)
-            renderer_present_rect(cursor_drawn_x, cursor_drawn_y, 7, 17);
+            renderer_present_rect(cursor_drawn_x, cursor_drawn_y, 8, 18);
+        renderer_set_clip_rect(px, py, pw, ph);
         gui_redraw();
-        /* The backbuffer is rebuilt completely, but the physical framebuffer
-         * only needs the region that actually changed. This avoids multi-MB
-         * uncached writes for every keypress or small GUI interaction. */
+        renderer_clear_clip();
         renderer_reset_dirty();
         renderer_mark_dirty_rect(px, py, pw, ph);
         renderer_present();
@@ -873,18 +1207,22 @@ void gui_present(void) {
 
 static void handle_title_action(int index, int control) {
     struct gui_window* w = &windows[index];
+    int old_x = w->x, old_y = w->y, old_w = w->w, old_h = w->h;
     if (control == 1) {
         w->minimized = 1;
         w->dragging = 0;
-        if (focused_window == index) focused_window = -1;
-        return;
-    }
-    if (control == 2) {
+        if (focused_window == index) focus_next_visible();
+    } else if (control == 2) {
         w->visible = 0;
         w->minimized = 0;
         w->dragging = 0;
-        if (focused_window == index) focused_window = -1;
+        if (focused_window == index) focus_next_visible();
     }
+    int x0 = old_x < w->x ? old_x : w->x;
+    int y0 = old_y < w->y ? old_y : w->y;
+    int x1 = (old_x + old_w) > (w->x + w->w) ? (old_x + old_w) : (w->x + w->w);
+    int y1 = (old_y + old_h) > (w->y + w->h) ? (old_y + old_h) : (w->y + w->h);
+    gui_request_redraw_rect(x0 - 6, y0 - 6, x1 - x0 + 12, y1 - y0 + 12);
 }
 
 void gui_terminal_set_selection(int anchor, int cursor_pos) {
@@ -936,7 +1274,7 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     const framebuffer_info_t* f = framebuffer_info();
 
     mouse_x_pos += dx;
-    mouse_y_pos += dy; /* mouse driver normalizes PS/2 Y to screen coordinates */
+    mouse_y_pos += dy;
     mouse_x_pos = max_int(0, min_int(mouse_x_pos, (int)f->width - 1));
     mouse_y_pos = max_int(0, min_int(mouse_y_pos, (int)f->height - 1));
 
@@ -945,45 +1283,57 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     for (int i = 0; i < 6; ++i) {
         if (point_in_dock(i)) { dock_hot = i; break; }
     }
-    if (dock_hot != old_dock_hot) gui_request_redraw();
+    if (dock_hot != old_dock_hot)
+        gui_request_redraw_rect(((int)f->width - DOCK_W) / 2, (int)f->height - DOCK_Y_FROM_BOTTOM, DOCK_W, DOCK_H);
 
     if (wheel != 0 && inside_window(&windows[0], mouse_x_pos, mouse_y_pos)) {
         int delta = wheel > 0 ? -3 : 3;
         int max_top = max_int(0, TERM_ROWS - term_view_rows);
         term_view_top = max_int(0, min_int(term_view_top + delta, max_top));
-        gui_request_redraw();
+        gui_request_terminal_redraw();
     }
 
     uint8_t pressed = (uint8_t)((new_buttons ^ mouse_prev_buttons) & new_buttons);
     if (pressed & 1u) {
-        /* Top bar notification bell. */
-        if (point_in_notification_bell()) {
+        if (point_in_launcher_button()) {
+            launcher_open = !launcher_open;
+            power_open = 0;
+            gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
+        }
+        else if (launcher_open) {
+            int item = -1;
+            if (point_in_launcher_item(&item)) {
+                open_window(item);
+            } else {
+                launcher_open = 0;
+                gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
+            }
+        }
+        else if (point_in_notification_bell()) {
             notification_open = !notification_open;
             power_open = 0;
             gui_request_redraw();
         }
-        /* Power popup buttons. */
         else if (point_in_power_button(0)) {
             action_push(GUI_ACTION_REBOOT, 0);
             power_open = 0;
+            gui_request_redraw();
         }
         else if (point_in_power_button(1)) {
             action_push(GUI_ACTION_SHUTDOWN, 0);
             power_open = 0;
-        }
-        /* Dock. */
-        else if (dock_hot >= 0) {
-            power_open = dock_hot == 5 ? !power_open : 0;
-            if (dock_hot < 5) {
-                int idx = dock_hot;
-                windows[idx].visible = 1;
-                windows[idx].minimized = 0;
-                promote_window(idx);
-            }
             gui_request_redraw();
         }
+        else if (dock_hot >= 0) {
+            if (dock_hot == 5) {
+                power_open = !power_open;
+                launcher_open = 0;
+                gui_request_redraw();
+            } else {
+                open_window(dock_hot);
+            }
+        }
         else {
-            /* Focus topmost eligible window. */
             int hit = -1;
             for (int oi = WINDOW_COUNT - 1; oi >= 0; --oi) {
                 int idx = window_order[oi];
@@ -997,28 +1347,17 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                     handle_title_action(hit, control);
                 } else if (hit == 0) {
                     terminal_mouse_click();
-                    if (mouse_y_pos >= w->y + TITLE_H && mouse_y_pos < w->y + w->h)
-                        w->dragging = 0;
                 } else if (hit == 3) {
                     int key_index = -1;
                     if (point_in_calculator_key(&key_index)) calculator_key(key_index);
-                    else {
-                        const struct gui_window* cw = &windows[3];
-                        int clear_y = cw->y + TITLE_H + 18 + 68 + 4 * (48 + 8);
-                        if (mouse_x_pos >= cw->x + 18 && mouse_x_pos < cw->x + 18 + 4 * 70 + 3 * 8 &&
-                            mouse_y_pos >= clear_y && mouse_y_pos < clear_y + 34) {
-                            gui_strcopy(calc_display, "0", (int)sizeof(calc_display));
-                            calc_has_value = 0;
-                            gui_request_redraw();
-                        }
-                    }
                 } else if (hit == 2) {
-                    if (point_in_settings_row(0)) {
-                        action_push(GUI_ACTION_THEME, 0);
-                    } else if (point_in_settings_row(1)) {
+                    if (point_in_settings_row(0)) action_push(GUI_ACTION_THEME, 0);
+                    else if (point_in_settings_row(1)) {
                         notifications_enabled = !notifications_enabled;
+                        gui_request_redraw_rect(w->x, w->y, w->w, w->h);
                     } else if (point_in_settings_row(2)) {
                         animations_enabled = !animations_enabled;
+                        gui_request_redraw_rect(w->x, w->y, w->w, w->h);
                     }
                 }
                 if (mouse_y_pos < w->y + TITLE_H && !control) {
@@ -1026,9 +1365,11 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                     w->drag_dx = mouse_x_pos - w->x;
                     w->drag_dy = mouse_y_pos - w->y;
                 }
+                gui_request_redraw_rect(w->x - 6, w->y - 6, w->w + 12, w->h + 12);
             } else {
                 focused_window = -1;
                 power_open = 0;
+                gui_request_redraw();
             }
         }
     }
@@ -1045,19 +1386,39 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
         int y0 = old_y < w->y ? old_y : w->y;
         int x1 = (old_x + w->w) > (w->x + w->w) ? (old_x + w->w) : (w->x + w->w);
         int y1 = (old_y + w->h) > (w->y + w->h) ? (old_y + w->h) : (w->y + w->h);
-        gui_request_redraw_rect(x0, y0, x1 - x0, y1 - y0);
+        gui_request_redraw_rect(x0 - 6, y0 - 6, x1 - x0 + 12, y1 - y0 + 12);
     }
 
     mouse_prev_buttons = new_buttons;
 }
 
 void gui_set_runtime_ticks(uint32_t ticks) {
-    if (!ready || (ticks % 25u) != 0u) return;
-    if (runtime_ticks != ticks) {
-        runtime_ticks = ticks;
-        if (windows[4].visible && !windows[4].minimized)
-            gui_request_redraw_rect(windows[4].x, windows[4].y, windows[4].w, windows[4].h);
+    if (!ready) return;
+    if (ticks == runtime_ticks) return;
+    runtime_ticks = ticks;
+    if ((ticks % 25u) == 0u && windows[4].visible && !windows[4].minimized)
+        gui_request_redraw_rect(windows[4].x, windows[4].y, windows[4].w, windows[4].h);
+    if ((ticks % 100u) == 0u) {
+        /* Header clock is pushed by the kernel through gui_set_clock(). */
+        gui_request_redraw_rect(0, 0, (int)framebuffer_info()->width, TOPBAR_H);
     }
+}
+
+void gui_set_clock(int hour, int minute, int second, int day, int month, int year) {
+    if (!ready) return;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+        clock_valid = 0;
+        gui_request_redraw_rect(0, 0, (int)framebuffer_info()->width, TOPBAR_H);
+        return;
+    }
+    clock_hour = hour;
+    clock_minute = minute;
+    clock_second = second;
+    clock_day = day;
+    clock_month = month;
+    clock_year = year;
+    clock_valid = 1;
+    gui_request_redraw_rect(0, 0, (int)framebuffer_info()->width, TOPBAR_H);
 }
 
 int gui_take_terminal_cursor(int* cursor_pos) {

@@ -545,7 +545,7 @@ static uint8_t weekday_calc(int year, int month, int day) {
 }
 
 static int rtc_ready(void) {
-    for (uint32_t i = 0; i < 1000000u; ++i) {
+    for (uint32_t i = 0; i < 10000u; ++i) {
         if (!(rtc_read_reg(0x0A) & 0x80u)) return 1;
     }
     return 0;
@@ -2157,10 +2157,19 @@ void kernel_main(uint32_t magic, void* mb_info) {
     cpu_sti();
 
     prompt();
+    if (gui_available()) {
+        struct rtc_time initial_gui_time;
+        if (rtc_read(&initial_gui_time)) {
+            gui_set_clock(initial_gui_time.hour, initial_gui_time.min, initial_gui_time.sec,
+                          initial_gui_time.day, initial_gui_time.month, initial_gui_time.year);
+        }
+    }
+    uint32_t last_gui_clock_sync = 0xFFFFFFFFu;
 
     for (;;) {
         int event;
-        while ((event = kbd_get_event()) >= 0) {
+        int keyboard_budget = 32;
+        while (keyboard_budget-- > 0 && (event = kbd_get_event()) >= 0) {
             if (event == KEY_UP) {
                 if (history_count > 0 && history_cursor > 0) {
                     --history_cursor;
@@ -2248,6 +2257,11 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 prompt();
             } else if (event == '\t') {
                 cmd_complete();
+            } else if (ctrl_down && event >= '1' && event <= '5') {
+                if (gui_console_enabled && gui_available()) {
+                    gui_open_window(event - '1');
+                    continue;
+                }
             } else if (event >= 32 && event < 127) {
                 if (selection_anchor >= 0 && selection_anchor != cursor_pos) {
                     int a = selection_anchor, b = cursor_pos;
@@ -2269,11 +2283,21 @@ void kernel_main(uint32_t magic, void* mb_info) {
         if (gui_available()) {
             gui_set_runtime_ticks(timer_ticks);
             mouse_event_t mouse_event;
-            while (mouse_poll(&mouse_event)) {
-                /* Keep every button transition so a fast click cannot be
-                 * collapsed away. Rendering is already deferred to gui_present(). */
+            int mouse_budget = 12;
+            while (mouse_budget-- > 0 && mouse_poll(&mouse_event)) {
+                /* Bound mouse work per scheduler pass so a busy PS/2 stream
+                 * cannot starve keyboard input or GUI actions. */
                 gui_mouse_event(mouse_event.dx, mouse_event.dy, mouse_event.wheel,
                                 mouse_event.buttons);
+            }
+
+            if (timer_ticks != last_gui_clock_sync && (timer_ticks % 100u) == 0u) {
+                last_gui_clock_sync = timer_ticks;
+                struct rtc_time gui_time;
+                if (rtc_read(&gui_time)) {
+                    gui_set_clock(gui_time.hour, gui_time.min, gui_time.sec,
+                                  gui_time.day, gui_time.month, gui_time.year);
+                }
             }
 
             int requested_cursor = 0;

@@ -104,3 +104,20 @@ Full ISO/QEMU boot testing still requires NASM, GRUB and QEMU, which are not ins
 - Existing shell and GUI functionality is preserved.
 - Tests: `make test` PASS; freestanding i386 C compile with `-Wall -Wextra -Werror` PASS.
 - Bare-metal ISO/QEMU boot was not verified in this environment because NASM/GRUB/QEMU are unavailable.
+
+## Phase 8 UI/interaction overhaul
+
+- Reworked the desktop header: the right-side status, live RTC clock and date now have explicit spacing and no overlap.
+- Rebuilt the Dock layout with wider cells and dedicated Terminal, System, Settings, Calculator, Monitor and Power icons; long labels remain inside their buttons.
+- Added a MYOS application launcher from the top-left OS/MENU control.
+- Window close/minimize operations now explicitly repaint the exposed area, eliminating stale window images that previously disappeared only after hovering another control.
+- Window dragging uses clipped repainting and preserves the underlying windows correctly when z-order changes.
+- System Information was redesigned to a compact two-column layout so text stays inside the window while moving it.
+- System Monitor was redesigned to fit its content cleanly and now shares the live RTC clock state with the desktop.
+- The GUI Calculator now actually evaluates expressions with +, -, *, /, %, parentheses and unary signs; errors show as `ERR` instead of silently returning zero. `C` and `DEL` were added.
+- Renderer now supports a clip rectangle, so a small GUI change only redraws the requested screen region in the backbuffer.
+- Framebuffer presentation uses 32-bit pixel copies rather than byte-at-a-time copying.
+- Mouse and keyboard processing are budgeted per scheduler pass so a busy input queue cannot starve the other input path.
+- GUI clock synchronization is rate-limited to once per timer second, avoiding repeated RTC reads during the same tick.
+- Added GUI window shortcuts from the shell input path: `Ctrl+1` Terminal, `Ctrl+2` System Information, `Ctrl+3` Settings, `Ctrl+4` Calculator, `Ctrl+5` System Monitor.
+- Added unit coverage for the GUI calculator evaluator.

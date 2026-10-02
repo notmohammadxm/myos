@@ -54,7 +54,7 @@ build/mouse.o: src/drivers/mouse.c src/drivers/mouse.h
 
 build/unit-test: tests/unit.c src/graphics/framebuffer.c src/graphics/renderer.c src/graphics/font.c src/gui/gui.c src/drivers/mouse.c
 	@mkdir -p build
-	$(TEST_CC) $(TEST_CFLAGS) -o $@ $^
+	$(TEST_CC) $(TEST_CFLAGS) -DUNIT_TEST -o $@ $^
 
 build/myos.elf: $(KERNEL_OBJS) src/linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJS)
