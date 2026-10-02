@@ -12,9 +12,13 @@
 #define TOPBAR_H 62
 #define FOOTER_H 84
 #define TITLE_H 42
-#define MIN_WINDOW_W 300
-#define MIN_WINDOW_H 220
+#define MIN_WINDOW_W 260
+#define MIN_WINDOW_H 180
 #define WINDOW_COUNT 5
+#define TITLE_DOUBLE_CLICK_TICKS 35u
+#define SNAP_ZONE 24
+#define RESIZE_ZONE 14
+#define ANIMATION_TICKS 2u
 #define DOCK_W 700
 #define DOCK_H 64
 #define DOCK_CELL_W 112
@@ -23,10 +27,22 @@
 #define LAUNCHER_H 292
 struct gui_window {
     int x, y, w, h;
+    int target_x, target_y, target_w, target_h;
+    int restore_x, restore_y, restore_w, restore_h;
     int dragging;
+    int resizing;
+    int resize_edges;
+    int resize_anchor_right;
+    int resize_anchor_bottom;
     int drag_dx, drag_dy;
     int visible;
     int minimized;
+    int maximized;
+    int minimizing;
+    int closing;
+    int opening;
+    int snap_state;
+    int hover_control;
 };
 
 static int ready;
@@ -46,6 +62,10 @@ static int mouse_x_pos;
 static int mouse_y_pos;
 static uint8_t mouse_prev_buttons;
 static int focused_window;
+static int mouse_capture_window = -1;
+static int mouse_capture_mode;
+static int last_title_click_window = -1;
+static uint32_t last_title_click_tick;
 static uint32_t runtime_ticks;
 static int clock_hour;
 static int clock_minute;
@@ -78,13 +98,7 @@ static int window_order[WINDOW_COUNT] = { 1, 2, 3, 4, 0 };
 
 static void gui_request_redraw(void);
 static void gui_request_terminal_redraw(void);
-static struct gui_window windows[WINDOW_COUNT] = {
-    { 24, 92, 620, 526, 0, 0, 0, 1, 0 },
-    { 666, 92, 334, 238, 0, 0, 0, 1, 0 },
-    { 666, 344, 334, 238, 0, 0, 0, 1, 0 },
-    { 236, 132, 390, 410, 0, 0, 0, 0, 0 },
-    { 552, 152, 390, 410, 0, 0, 0, 0, 0 }
-};
+static struct gui_window windows[WINDOW_COUNT];
 
 static int min_int(int a, int b) { return a < b ? a : b; }
 static int max_int(int a, int b) { return a > b ? a : b; }
@@ -197,16 +211,118 @@ static int inside_window(const struct gui_window* w, int x, int y) {
            x >= w->x && y >= w->y && x < w->x + w->w && y < w->y + w->h;
 }
 
-static void clamp_window(struct gui_window* w) {
+static void clamp_target(struct gui_window* w) {
     const framebuffer_info_t* f = framebuffer_info();
-    int max_x = (int)f->width - w->w;
-    int max_y = (int)f->height - FOOTER_H - 4;
+    if (!f) return;
+    int max_w = max_int(MIN_WINDOW_W, (int)f->width - 8);
+    int max_h = max_int(MIN_WINDOW_H, (int)f->height - TOPBAR_H - FOOTER_H - 8);
+    if (w->target_w < MIN_WINDOW_W) w->target_w = MIN_WINDOW_W;
+    if (w->target_h < MIN_WINDOW_H) w->target_h = MIN_WINDOW_H;
+    if (w->target_w > max_w) w->target_w = max_w;
+    if (w->target_h > max_h) w->target_h = max_h;
+    int max_x = (int)f->width - w->target_w - 4;
+    int max_y = (int)f->height - FOOTER_H - w->target_h - 4;
     if (max_x < 4) max_x = 4;
     if (max_y < TOPBAR_H + 2) max_y = TOPBAR_H + 2;
-    if (w->x < 4) w->x = 4;
-    if (w->y < TOPBAR_H + 2) w->y = TOPBAR_H + 2;
-    if (w->x > max_x) w->x = max_x;
-    if (w->y > max_y) w->y = max_y;
+    if (w->target_x < 4) w->target_x = 4;
+    if (w->target_y < TOPBAR_H + 2) w->target_y = TOPBAR_H + 2;
+    if (w->target_x > max_x) w->target_x = max_x;
+    if (w->target_y > max_y) w->target_y = max_y;
+}
+
+static void window_set_initial(struct gui_window* w, int x, int y, int width, int height) {
+    w->target_x = x;
+    w->target_y = y;
+    w->target_w = width;
+    w->target_h = height;
+    clamp_target(w);
+    w->x = w->target_x;
+    w->y = w->target_y;
+    w->w = w->target_w;
+    w->h = w->target_h;
+    w->restore_x = w->x;
+    w->restore_y = w->y;
+    w->restore_w = w->w;
+    w->restore_h = w->h;
+}
+
+static void dock_geometry(int index, int* x, int* y, int* w, int* h) {
+    const framebuffer_info_t* f = framebuffer_info();
+    int dock_x = f ? ((int)f->width - DOCK_W) / 2 : 0;
+    int dock_y = f ? (int)f->height - DOCK_Y_FROM_BOTTOM : 0;
+    if (x) *x = dock_x + 16 + index * DOCK_CELL_W;
+    if (y) *y = dock_y + 14;
+    if (w) *w = 84;
+    if (h) *h = 34;
+}
+
+static int smooth_value(int current, int target) {
+    int diff = target - current;
+    if (diff == 0) return current;
+    if (diff > -2 && diff < 2) return target;
+    int step = (diff * 55) / 100;
+    if (step == 0) step = diff > 0 ? 1 : -1;
+    return current + step;
+}
+
+static void window_finish_transition(struct gui_window* w) {
+    w->x = w->target_x;
+    w->y = w->target_y;
+    w->w = w->target_w;
+    w->h = w->target_h;
+    if (w->minimizing) {
+        w->minimized = 1;
+        w->minimizing = 0;
+    }
+    if (w->closing) {
+        w->visible = 0;
+        w->closing = 0;
+    }
+    w->opening = 0;
+}
+
+static void window_set_target(struct gui_window* w, int x, int y, int width, int height) {
+    w->target_x = x;
+    w->target_y = y;
+    w->target_w = width;
+    w->target_h = height;
+    clamp_target(w);
+    if (!animations_enabled) window_finish_transition(w);
+}
+
+static void window_transition_rect(struct gui_window* w, int old_x, int old_y, int old_w, int old_h) {
+    int x0 = old_x < w->x ? old_x : w->x;
+    int y0 = old_y < w->y ? old_y : w->y;
+    int x1 = (old_x + old_w) > (w->x + w->w) ? (old_x + old_w) : (w->x + w->w);
+    int y1 = (old_y + old_h) > (w->y + w->h) ? (old_y + old_h) : (w->y + w->h);
+    int tx1 = w->target_x + w->target_w;
+    int ty1 = w->target_y + w->target_h;
+    if (w->target_x < x0) x0 = w->target_x;
+    if (w->target_y < y0) y0 = w->target_y;
+    if (tx1 > x1) x1 = tx1;
+    if (ty1 > y1) y1 = ty1;
+    gui_request_redraw_rect(x0 - 10, y0 - 10, x1 - x0 + 20, y1 - y0 + 20);
+}
+
+static void advance_window_animations(void) {
+    for (int i = 0; i < WINDOW_COUNT; ++i) {
+        struct gui_window* w = &windows[i];
+        if (!w->visible && !w->opening) continue;
+        if (w->x == w->target_x && w->y == w->target_y &&
+            w->w == w->target_w && w->h == w->target_h) {
+            if (w->minimizing || w->closing || w->opening) window_finish_transition(w);
+            continue;
+        }
+        int old_x = w->x, old_y = w->y, old_w = w->w, old_h = w->h;
+        w->x = smooth_value(w->x, w->target_x);
+        w->y = smooth_value(w->y, w->target_y);
+        w->w = smooth_value(w->w, w->target_w);
+        w->h = smooth_value(w->h, w->target_h);
+        if (w->x == w->target_x && w->y == w->target_y &&
+            w->w == w->target_w && w->h == w->target_h) window_finish_transition(w);
+        if (old_x != w->x || old_y != w->y || old_w != w->w || old_h != w->h)
+            window_transition_rect(w, old_x, old_y, old_w, old_h);
+    }
 }
 
 static void layout_windows(void) {
@@ -216,32 +332,28 @@ static void layout_windows(void) {
     int side_w = 334;
     int gap = 14;
 
-    windows[0].x = 24;
-    windows[0].y = TOPBAR_H + 30;
-    windows[0].w = max_int(MIN_WINDOW_W, screen_w - side_w - 66);
-    windows[0].h = max_int(MIN_WINDOW_H, screen_h - TOPBAR_H - FOOTER_H - 42);
+    window_set_initial(&windows[0], 24, TOPBAR_H + 30,
+                       screen_w - side_w - 66, screen_h - TOPBAR_H - FOOTER_H - 42);
+    window_set_initial(&windows[1], screen_w - side_w - 24, TOPBAR_H + 30, side_w, 238);
+    window_set_initial(&windows[2], screen_w - side_w - 24,
+                       TOPBAR_H + 30 + 238 + gap, side_w, 238);
+    window_set_initial(&windows[3], 228, TOPBAR_H + 78, 390, 410);
+    window_set_initial(&windows[4], max_int(360, screen_w / 2 + 40),
+                       TOPBAR_H + 100, 390, 410);
 
-    windows[1].x = screen_w - side_w - 24;
-    windows[1].y = TOPBAR_H + 30;
-    windows[1].w = side_w;
-    windows[1].h = 238;
-
-    windows[2].x = screen_w - side_w - 24;
-    windows[2].y = windows[1].y + windows[1].h + gap;
-    windows[2].w = side_w;
-    windows[2].h = 238;
-
-    windows[3].x = 228;
-    windows[3].y = TOPBAR_H + 78;
-    windows[3].w = 390;
-    windows[3].h = 410;
-
-    windows[4].x = max_int(360, screen_w / 2 + 40);
-    windows[4].y = TOPBAR_H + 100;
-    windows[4].w = 390;
-    windows[4].h = 410;
-
-    for (int i = 0; i < WINDOW_COUNT; ++i) clamp_window(&windows[i]);
+    for (int i = 0; i < WINDOW_COUNT; ++i) {
+        windows[i].visible = (i < 3) ? 1 : 0;
+        windows[i].minimized = 0;
+        windows[i].dragging = 0;
+        windows[i].resizing = 0;
+        windows[i].resize_edges = 0;
+        windows[i].maximized = 0;
+        windows[i].minimizing = 0;
+        windows[i].closing = 0;
+        windows[i].opening = 0;
+        windows[i].snap_state = 0;
+        windows[i].hover_control = 0;
+    }
 }
 
 
@@ -298,32 +410,66 @@ static void draw_icon_power(int x, int y, uint32_t c) {
     renderer_line(x + 20, y + 9, x + 18, y + 6, c);
 }
 
-static void draw_window_controls(const struct gui_window* w) {
+static uint32_t control_color(const struct gui_window* w, int control) {
+    if (w->hover_control == control) {
+        if (control == 3) return danger;
+        if (control == 2) return accent;
+        return warning;
+    }
+    return border;
+}
+
+static void draw_control_button(const struct gui_window* w, int center_x, int control, uint32_t color) {
+    renderer_rect(center_x - 11, w->y + 10, 22, 20,
+                  w->hover_control == control ? panel2 : panel);
+    renderer_border(center_x - 11, w->y + 10, 22, 20, 1, color);
     int cy = w->y + 20;
-    int min_x = w->x + w->w - 62;
-    int close_x = w->x + w->w - 24;
-    renderer_rect(min_x - 5, cy - 5, 14, 14, warning);
-    renderer_rect(close_x - 5, cy - 5, 14, 14, danger);
-    renderer_line(close_x - 2, cy - 2, close_x + 2, cy + 2, bg);
-    renderer_line(close_x + 2, cy - 2, close_x - 2, cy + 2, bg);
-    renderer_rect(w->x + 15, w->y + 17, 10, 6, accent);
+    if (control == 1) {
+        renderer_rect(center_x - 5, cy + 3, 10, 2, color);
+    } else if (control == 2) {
+        renderer_border(center_x - 5, cy - 5, 10, 10, 1, color);
+    } else {
+        renderer_line(center_x - 4, cy - 4, center_x + 4, cy + 4, color);
+        renderer_line(center_x + 4, cy - 4, center_x - 4, cy + 4, color);
+    }
+}
+
+static void draw_window_controls(const struct gui_window* w) {
+    if (w->w < 150 || w->h < TITLE_H) return;
+    draw_control_button(w, w->x + w->w - 82, 1, control_color(w, 1));
+    draw_control_button(w, w->x + w->w - 52, 2, control_color(w, 2));
+    draw_control_button(w, w->x + w->w - 22, 3, control_color(w, 3));
+}
+
+static void draw_resize_grip(const struct gui_window* w, uint32_t color) {
+    if (w->maximized || w->resizing || w->minimizing || w->closing ||
+        w->w < MIN_WINDOW_W || w->h < MIN_WINDOW_H) return;
+    int x = w->x + w->w - 16;
+    int y = w->y + w->h - 16;
+    renderer_line(x + 3, y + 10, x + 10, y + 3, color);
+    renderer_line(x + 8, y + 11, x + 11, y + 8, color);
 }
 
 static void draw_window(const struct gui_window* w, const char* title, int index) {
-    if (!w->visible || w->minimized) return;
+    if (!w->visible) return;
+    if (w->w < 70 || w->h < 24) return;
     uint32_t line = index == focused_window ? accent : border;
-    renderer_rect(w->x + 5, w->y + 6, w->w, w->h, bg);
+    if (w->closing || w->minimizing) line = index == focused_window ? accent : muted;
+    renderer_rect(w->x + 7, w->y + 8, w->w, w->h, bg);
     renderer_rect(w->x, w->y, w->w, w->h, panel);
-    renderer_border(w->x, w->y, w->w, w->h, 1, line);
-    renderer_rect(w->x + 1, w->y + 1, w->w - 2, TITLE_H - 1, panel2);
-    renderer_rect(w->x + 1, w->y + 1, w->w - 2, 3, line);
-    draw_text(w->x + 32, w->y + 14, title, text);
-    if (index == focused_window) draw_text(w->x + 32, w->y + 28, "ACTIVE", accent);
-    draw_window_controls(w);
+    if (w->w > 2) renderer_border(w->x, w->y, w->w, w->h, 1, line);
+    if (w->w > 4) renderer_border(w->x + 2, w->y + 2, w->w - 4, w->h - 4, 1, border);
+    int title_w = w->w - 2;
+    if (title_w > 0) renderer_rect(w->x + 1, w->y + 1, title_w, TITLE_H - 1, panel2);
+    if (title_w > 4) renderer_rect(w->x + 1, w->y + 1, title_w, 3, line);
+    draw_text(w->x + 30, w->y + 13, title, index == focused_window ? text : muted);
+    if (index == focused_window && w->h >= TITLE_H + 12) draw_text(w->x + 30, w->y + 28, "ACTIVE", accent);
+    if (w->w >= 150) draw_window_controls(w);
+    if (w->w >= MIN_WINDOW_W && w->h >= MIN_WINDOW_H) draw_resize_grip(w, index == focused_window ? accent : muted);
 }
 
 static void draw_sysinfo(const struct gui_window* w) {
-    if (!w->visible || w->minimized) return;
+    if (!w->visible || w->minimized || w->w < 160 || w->h < TITLE_H + 60) return;
     const framebuffer_info_t* f = framebuffer_info();
     int x = w->x + 18;
     int y = w->y + TITLE_H + 18;
@@ -895,10 +1041,12 @@ static int point_in_launcher_item(int* item) {
 }
 
 static int title_control_at(const struct gui_window* w) {
+    if (!w || w->w < 150) return 0;
     int rel_x = mouse_x_pos - w->x;
     if (mouse_y_pos < w->y || mouse_y_pos >= w->y + TITLE_H) return 0;
-    if (rel_x >= w->w - 38) return 2;
-    if (rel_x >= w->w - 76) return 1;
+    if (rel_x >= w->w - 38) return 3;
+    if (rel_x >= w->w - 68) return 2;
+    if (rel_x >= w->w - 98) return 1;
     return 0;
 }
 
@@ -944,14 +1092,33 @@ static int point_in_settings_row(int row) {
 
 static void open_window(int index) {
     if (index < 0 || index >= WINDOW_COUNT) return;
-    if (!windows[index].visible || windows[index].minimized) {
-        windows[index].minimized = 0;
-        windows[index].visible = 1;
+    struct gui_window* w = &windows[index];
+    if (!w->visible) {
+        int dx, dy, dw, dh;
+        dock_geometry(index, &dx, &dy, &dw, &dh);
+        w->x = dx;
+        w->y = dy;
+        w->w = dw;
+        w->h = dh;
+        w->visible = 1;
+        w->minimized = 0;
+        w->opening = 1;
+        w->closing = 0;
+        w->minimizing = 0;
+    } else if (w->minimized) {
+        w->minimized = 0;
+        w->opening = 1;
+        w->target_x = w->restore_x;
+        w->target_y = w->restore_y;
+        w->target_w = w->restore_w;
+        w->target_h = w->restore_h;
     }
     promote_window(index);
     launcher_open = 0;
     power_open = 0;
-    gui_request_redraw();
+    if (!animations_enabled) window_finish_transition(w);
+    else window_transition_rect(w, w->x, w->y, w->w, w->h);
+    gui_request_redraw_rect(w->x - 12, w->y - 12, w->w + 24, w->h + 24);
 }
 
 void gui_open_window(int index) {
@@ -960,14 +1127,60 @@ void gui_open_window(int index) {
 }
 
 static void focus_next_visible(void) {
+    if (focused_window >= 0 && focused_window < WINDOW_COUNT &&
+        windows[focused_window].visible && !windows[focused_window].minimized &&
+        !windows[focused_window].closing) return;
     for (int i = WINDOW_COUNT - 1; i >= 0; --i) {
         int idx = window_order[i];
-        if (windows[idx].visible && !windows[idx].minimized) {
+        if (windows[idx].visible && !windows[idx].minimized && !windows[idx].closing) {
             focused_window = idx;
             return;
         }
     }
     focused_window = -1;
+}
+
+static void finish_all_window_animations(void) {
+    for (int i = 0; i < WINDOW_COUNT; ++i) {
+        struct gui_window* w = &windows[i];
+        if (w->x != w->target_x || w->y != w->target_y ||
+            w->w != w->target_w || w->h != w->target_h ||
+            w->minimizing || w->closing || w->opening) {
+            int old_x = w->x, old_y = w->y, old_w = w->w, old_h = w->h;
+            window_finish_transition(w);
+            gui_request_redraw_rect(old_x - 12, old_y - 12, old_w + 24, old_h + 24);
+            gui_request_redraw_rect(w->x - 12, w->y - 12, w->w + 24, w->h + 24);
+        }
+    }
+}
+
+static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
+    (void)shift;
+    if (!ready || focused_window < 0 || focused_window >= WINDOW_COUNT) return 0;
+    if (ctrl && event >= '1' && event <= '5') return 0;
+    if (focused_window == 0) return 0;
+    if (focused_window == 3) {
+        if (event == '\n' || event == '\r') {
+            calculator_evaluate();
+            return 1;
+        }
+        if (event == 8 || event == 127) {
+            calculator_backspace();
+            gui_request_redraw();
+            return 1;
+        }
+        if (event >= 32 && event < 127) {
+            char c = (char)event;
+            if ((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '*' ||
+                c == '/' || c == '%' || c == '(' || c == ')' || c == '.') {
+                calculator_append_char(c);
+                gui_request_redraw();
+                return 1;
+            }
+        }
+    }
+    if (event == KEY_CTRL_L) return 1;
+    return 1;
 }
 
 void gui_init(void) {
@@ -991,6 +1204,10 @@ void gui_init(void) {
     mouse_y_pos = (int)framebuffer_info()->height / 2;
     mouse_prev_buttons = 0;
     focused_window = 0;
+    mouse_capture_window = -1;
+    mouse_capture_mode = 0;
+    last_title_click_window = -1;
+    last_title_click_tick = 0;
     dock_hot = -1;
     launcher_open = 0;
     notification_open = 1;
@@ -1012,6 +1229,10 @@ void gui_init(void) {
 }
 
 int gui_available(void) { return ready != 0; }
+
+int gui_keyboard_event(int event, int ctrl, int shift) {
+    return gui_keyboard_event_internal(event, ctrl, shift);
+}
 
 void gui_set_theme(const char* name) {
     if (!ready) return;
@@ -1205,24 +1426,110 @@ void gui_present(void) {
     update_cursor_overlay();
 }
 
+static int resize_edges_at(const struct gui_window* w) {
+    if (!w || w->maximized || w->minimized || w->closing || w->minimizing ||
+        w->opening || w->w < MIN_WINDOW_W || w->h < MIN_WINDOW_H) return 0;
+    int edges = 0;
+    int right = w->x + w->w;
+    int bottom = w->y + w->h;
+    if (mouse_x_pos >= right - RESIZE_ZONE && mouse_x_pos <= right + 2) edges |= 1;
+    if (mouse_y_pos >= bottom - RESIZE_ZONE && mouse_y_pos <= bottom + 2) edges |= 2;
+    if (mouse_x_pos <= w->x + RESIZE_ZONE && mouse_x_pos >= w->x - 2) edges |= 4;
+    if (mouse_y_pos <= w->y + RESIZE_ZONE && mouse_y_pos >= w->y - 2) edges |= 8;
+    if (mouse_y_pos < w->y + TITLE_H) edges &= (uint8_t)~8u;
+    return edges;
+}
+
+static void save_restore_geometry(struct gui_window* w) {
+    if (!w->maximized && w->snap_state == 0) {
+        w->restore_x = w->target_x;
+        w->restore_y = w->target_y;
+        w->restore_w = w->target_w;
+        w->restore_h = w->target_h;
+    }
+}
+
+static void toggle_maximize(struct gui_window* w) {
+    if (!w) return;
+    if (w->maximized || w->snap_state != 0) {
+        window_set_target(w, w->restore_x, w->restore_y, w->restore_w, w->restore_h);
+        w->maximized = 0;
+        w->snap_state = 0;
+        w->minimizing = 0;
+        w->closing = 0;
+        w->opening = 0;
+        return;
+    }
+    save_restore_geometry(w);
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    window_set_target(w, 4, TOPBAR_H + 2,
+                      (int)f->width - 8, (int)f->height - TOPBAR_H - FOOTER_H - 6);
+    w->maximized = 1;
+    w->snap_state = 3;
+}
+
+static void apply_snap(struct gui_window* w) {
+    if (!w || w->maximized || w->minimized || w->closing || w->minimizing) return;
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    int sw = (int)f->width;
+    int sh = (int)f->height;
+    int work_h = sh - TOPBAR_H - FOOTER_H - 6;
+    int half_w = (sw - 12) / 2;
+    if (w->target_y <= TOPBAR_H + SNAP_ZONE) {
+        toggle_maximize(w);
+        return;
+    }
+    if (w->target_x <= SNAP_ZONE) {
+        if (w->snap_state == 0) save_restore_geometry(w);
+        window_set_target(w, 6, TOPBAR_H + 2, half_w, work_h);
+        w->snap_state = 1;
+    } else if (w->target_x + w->target_w >= sw - SNAP_ZONE) {
+        if (w->snap_state == 0) save_restore_geometry(w);
+        window_set_target(w, sw - half_w - 6, TOPBAR_H + 2, half_w, work_h);
+        w->snap_state = 2;
+    }
+}
+
 static void handle_title_action(int index, int control) {
+    if (index < 0 || index >= WINDOW_COUNT) return;
     struct gui_window* w = &windows[index];
     int old_x = w->x, old_y = w->y, old_w = w->w, old_h = w->h;
+    w->hover_control = 0;
     if (control == 1) {
-        w->minimized = 1;
+        save_restore_geometry(w);
+        int dx, dy, dw, dh;
+        dock_geometry(index, &dx, &dy, &dw, &dh);
+        w->target_x = dx;
+        w->target_y = dy;
+        w->target_w = dw;
+        w->target_h = dh;
+        w->minimizing = 1;
+        w->maximized = 0;
+        w->snap_state = 0;
         w->dragging = 0;
+        w->resizing = 0;
+        mouse_capture_window = -1;
+        if (!animations_enabled) window_finish_transition(w);
         if (focused_window == index) focus_next_visible();
     } else if (control == 2) {
-        w->visible = 0;
-        w->minimized = 0;
+        toggle_maximize(w);
+    } else if (control == 3) {
+        int dx, dy, dw, dh;
+        dock_geometry(index, &dx, &dy, &dw, &dh);
+        w->target_x = dx;
+        w->target_y = dy;
+        w->target_w = dw;
+        w->target_h = dh;
+        w->closing = 1;
         w->dragging = 0;
+        w->resizing = 0;
+        mouse_capture_window = -1;
+        if (!animations_enabled) window_finish_transition(w);
         if (focused_window == index) focus_next_visible();
     }
-    int x0 = old_x < w->x ? old_x : w->x;
-    int y0 = old_y < w->y ? old_y : w->y;
-    int x1 = (old_x + old_w) > (w->x + w->w) ? (old_x + old_w) : (w->x + w->w);
-    int y1 = (old_y + old_h) > (w->y + w->h) ? (old_y + old_h) : (w->y + w->h);
-    gui_request_redraw_rect(x0 - 6, y0 - 6, x1 - x0 + 12, y1 - y0 + 12);
+    window_transition_rect(w, old_x, old_y, old_w, old_h);
 }
 
 void gui_terminal_set_selection(int anchor, int cursor_pos) {
@@ -1269,6 +1576,39 @@ static void terminal_mouse_click(void) {
     if (selection_cursor > input_rendered_len) selection_cursor = input_rendered_len;
 }
 
+static void update_window_hover(void) {
+    int old_index = -1;
+    int old_control = 0;
+    for (int i = 0; i < WINDOW_COUNT; ++i) {
+        if (windows[i].hover_control) {
+            old_index = i;
+            old_control = windows[i].hover_control;
+            break;
+        }
+        windows[i].hover_control = 0;
+    }
+    int new_index = -1;
+    int new_control = 0;
+    for (int oi = WINDOW_COUNT - 1; oi >= 0; --oi) {
+        int idx = window_order[oi];
+        struct gui_window* w = &windows[idx];
+        if (!w->visible || w->minimized || w->closing) continue;
+        if (inside_window(w, mouse_x_pos, mouse_y_pos)) {
+            new_index = idx;
+            new_control = title_control_at(w);
+            break;
+        }
+    }
+    for (int i = 0; i < WINDOW_COUNT; ++i) windows[i].hover_control = 0;
+    if (new_index >= 0) windows[new_index].hover_control = new_control;
+    if (old_index >= 0 && old_control != 0)
+        gui_request_redraw_rect(windows[old_index].x + windows[old_index].w - 104,
+                                windows[old_index].y + 4, 104, TITLE_H - 2);
+    if (new_index >= 0 && new_control != 0)
+        gui_request_redraw_rect(windows[new_index].x + windows[new_index].w - 104,
+                                windows[new_index].y + 4, 104, TITLE_H - 2);
+}
+
 void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     if (!ready) return;
     const framebuffer_info_t* f = framebuffer_info();
@@ -1284,47 +1624,42 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
         if (point_in_dock(i)) { dock_hot = i; break; }
     }
     if (dock_hot != old_dock_hot)
-        gui_request_redraw_rect(((int)f->width - DOCK_W) / 2, (int)f->height - DOCK_Y_FROM_BOTTOM, DOCK_W, DOCK_H);
-
-    if (wheel != 0 && inside_window(&windows[0], mouse_x_pos, mouse_y_pos)) {
-        int delta = wheel > 0 ? -3 : 3;
-        int max_top = max_int(0, TERM_ROWS - term_view_rows);
-        term_view_top = max_int(0, min_int(term_view_top + delta, max_top));
-        gui_request_terminal_redraw();
-    }
+        gui_request_redraw_rect(((int)f->width - DOCK_W) / 2,
+                                (int)f->height - DOCK_Y_FROM_BOTTOM, DOCK_W, DOCK_H);
 
     uint8_t pressed = (uint8_t)((new_buttons ^ mouse_prev_buttons) & new_buttons);
+    uint8_t released = (uint8_t)((new_buttons ^ mouse_prev_buttons) & mouse_prev_buttons);
+
     if (pressed & 1u) {
-        if (point_in_launcher_button()) {
+        if (launcher_open) {
+            if (point_in_launcher_button()) {
+                launcher_open = 0;
+                gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
+            } else {
+                int item = -1;
+                if (point_in_launcher_item(&item)) open_window(item);
+                else {
+                    launcher_open = 0;
+                    gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
+                }
+            }
+        } else if (point_in_launcher_button()) {
             launcher_open = !launcher_open;
             power_open = 0;
             gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
-        }
-        else if (launcher_open) {
-            int item = -1;
-            if (point_in_launcher_item(&item)) {
-                open_window(item);
-            } else {
-                launcher_open = 0;
-                gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 12);
-            }
-        }
-        else if (point_in_notification_bell()) {
+        } else if (point_in_notification_bell()) {
             notification_open = !notification_open;
             power_open = 0;
             gui_request_redraw();
-        }
-        else if (point_in_power_button(0)) {
+        } else if (point_in_power_button(0)) {
             action_push(GUI_ACTION_REBOOT, 0);
             power_open = 0;
             gui_request_redraw();
-        }
-        else if (point_in_power_button(1)) {
+        } else if (point_in_power_button(1)) {
             action_push(GUI_ACTION_SHUTDOWN, 0);
             power_open = 0;
             gui_request_redraw();
-        }
-        else if (dock_hot >= 0) {
+        } else if (dock_hot >= 0) {
             if (dock_hot == 5) {
                 power_open = !power_open;
                 launcher_open = 0;
@@ -1332,8 +1667,7 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
             } else {
                 open_window(dock_hot);
             }
-        }
-        else {
+        } else if (mouse_capture_window < 0) {
             int hit = -1;
             for (int oi = WINDOW_COUNT - 1; oi >= 0; --oi) {
                 int idx = window_order[oi];
@@ -1344,51 +1678,128 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                 struct gui_window* w = &windows[hit];
                 int control = title_control_at(w);
                 if (control) {
+                    int is_double = last_title_click_window == hit &&
+                                    (uint32_t)(runtime_ticks - last_title_click_tick) <= TITLE_DOUBLE_CLICK_TICKS;
+                    last_title_click_window = is_double ? -1 : hit;
+                    last_title_click_tick = runtime_ticks;
                     handle_title_action(hit, control);
-                } else if (hit == 0) {
-                    terminal_mouse_click();
-                } else if (hit == 3) {
-                    int key_index = -1;
-                    if (point_in_calculator_key(&key_index)) calculator_key(key_index);
-                } else if (hit == 2) {
-                    if (point_in_settings_row(0)) action_push(GUI_ACTION_THEME, 0);
-                    else if (point_in_settings_row(1)) {
-                        notifications_enabled = !notifications_enabled;
-                        gui_request_redraw_rect(w->x, w->y, w->w, w->h);
-                    } else if (point_in_settings_row(2)) {
-                        animations_enabled = !animations_enabled;
-                        gui_request_redraw_rect(w->x, w->y, w->w, w->h);
+                } else if (w->maximized == 0 && mouse_y_pos < w->y + TITLE_H) {
+                    if (last_title_click_window == hit &&
+                        (uint32_t)(runtime_ticks - last_title_click_tick) <= TITLE_DOUBLE_CLICK_TICKS) {
+                        last_title_click_window = -1;
+                        toggle_maximize(w);
+                    } else {
+                        last_title_click_window = hit;
+                        last_title_click_tick = runtime_ticks;
+                        w->dragging = 1;
+                        mouse_capture_window = hit;
+                        mouse_capture_mode = 1;
+                        w->drag_dx = mouse_x_pos - w->x;
+                        w->drag_dy = mouse_y_pos - w->y;
+                    }
+                } else {
+                    int edges = resize_edges_at(w);
+                    if (edges) {
+                        w->resizing = 1;
+                        w->resize_edges = edges;
+                        w->resize_anchor_right = w->target_x + w->target_w;
+                        w->resize_anchor_bottom = w->target_y + w->target_h;
+                        w->drag_dx = mouse_x_pos - w->target_x;
+                        w->drag_dy = mouse_y_pos - w->target_y;
+                        mouse_capture_window = hit;
+                        mouse_capture_mode = 2;
+                    } else if (hit == 0) {
+                        terminal_mouse_click();
+                    } else if (hit == 3) {
+                        int key_index = -1;
+                        if (point_in_calculator_key(&key_index)) calculator_key(key_index);
+                    } else if (hit == 2) {
+                        if (point_in_settings_row(0)) action_push(GUI_ACTION_THEME, 0);
+                        else if (point_in_settings_row(1)) {
+                            notifications_enabled = !notifications_enabled;
+                            gui_request_redraw_rect(w->x, w->y, w->w, w->h);
+                        } else if (point_in_settings_row(2)) {
+                            animations_enabled = !animations_enabled;
+                            if (!animations_enabled) finish_all_window_animations();
+                            gui_request_redraw_rect(w->x, w->y, w->w, w->h);
+                        }
                     }
                 }
-                if (mouse_y_pos < w->y + TITLE_H && !control) {
-                    w->dragging = 1;
-                    w->drag_dx = mouse_x_pos - w->x;
-                    w->drag_dy = mouse_y_pos - w->y;
-                }
-                gui_request_redraw_rect(w->x - 6, w->y - 6, w->w + 12, w->h + 12);
+                gui_request_redraw_rect(w->x - 12, w->y - 12, w->w + 24, w->h + 24);
             } else {
                 focused_window = -1;
                 power_open = 0;
+                launcher_open = 0;
                 gui_request_redraw();
             }
         }
     }
 
-    if (!(new_buttons & 1u)) {
-        for (int i = 0; i < WINDOW_COUNT; ++i) windows[i].dragging = 0;
-    } else if (focused_window >= 0 && windows[focused_window].dragging) {
-        struct gui_window* w = &windows[focused_window];
-        int old_x = w->x, old_y = w->y;
-        w->x = mouse_x_pos - w->drag_dx;
-        w->y = mouse_y_pos - w->drag_dy;
-        clamp_window(w);
-        int x0 = old_x < w->x ? old_x : w->x;
-        int y0 = old_y < w->y ? old_y : w->y;
-        int x1 = (old_x + w->w) > (w->x + w->w) ? (old_x + w->w) : (w->x + w->w);
-        int y1 = (old_y + w->h) > (w->y + w->h) ? (old_y + w->h) : (w->y + w->h);
-        gui_request_redraw_rect(x0 - 6, y0 - 6, x1 - x0 + 12, y1 - y0 + 12);
+    if (mouse_capture_window >= 0 && mouse_capture_window < WINDOW_COUNT &&
+        (new_buttons & 1u)) {
+        struct gui_window* w = &windows[mouse_capture_window];
+        if (mouse_capture_mode == 1 && w->dragging) {
+            int old_x = w->x, old_y = w->y;
+            w->target_x = mouse_x_pos - w->drag_dx;
+            w->target_y = mouse_y_pos - w->drag_dy;
+            clamp_target(w);
+            w->maximized = 0;
+            w->snap_state = 0;
+            w->x = w->target_x;
+            w->y = w->target_y;
+            w->restore_x = w->x;
+            w->restore_y = w->y;
+            w->restore_w = w->w;
+            w->restore_h = w->h;
+            window_transition_rect(w, old_x, old_y, w->w, w->h);
+        } else if (mouse_capture_mode == 2 && w->resizing) {
+            int left = w->target_x;
+            int top = w->target_y;
+            int right = w->resize_anchor_right;
+            int bottom = w->resize_anchor_bottom;
+            if (w->resize_edges & 1) right = mouse_x_pos;
+            if (w->resize_edges & 2) bottom = mouse_y_pos;
+            if (w->resize_edges & 4) left = mouse_x_pos;
+            if (w->resize_edges & 8) top = mouse_y_pos;
+            if (right - left < MIN_WINDOW_W) {
+                if (w->resize_edges & 4) left = right - MIN_WINDOW_W;
+                else right = left + MIN_WINDOW_W;
+            }
+            if (bottom - top < MIN_WINDOW_H) {
+                if (w->resize_edges & 8) top = bottom - MIN_WINDOW_H;
+                else bottom = top + MIN_WINDOW_H;
+            }
+            window_set_target(w, left, top, right - left, bottom - top);
+            w->x = w->target_x;
+            w->y = w->target_y;
+            w->w = w->target_w;
+            w->h = w->target_h;
+            save_restore_geometry(w);
+            window_transition_rect(w, w->x, w->y, w->w, w->h);
+        }
     }
 
+    if (released & 1u) {
+        if (mouse_capture_window >= 0 && mouse_capture_window < WINDOW_COUNT) {
+            struct gui_window* w = &windows[mouse_capture_window];
+            if (w->dragging) apply_snap(w);
+            w->dragging = 0;
+            w->resizing = 0;
+            w->resize_edges = 0;
+        }
+        mouse_capture_window = -1;
+        mouse_capture_mode = 0;
+    }
+
+    if (wheel != 0 && mouse_capture_window < 0 &&
+        inside_window(&windows[0], mouse_x_pos, mouse_y_pos)) {
+        int delta = wheel > 0 ? -3 : 3;
+        int max_top = max_int(0, TERM_ROWS - term_view_rows);
+        term_view_top = max_int(0, min_int(term_view_top + delta, max_top));
+        gui_request_terminal_redraw();
+    }
+
+    update_window_hover();
     mouse_prev_buttons = new_buttons;
 }
 
@@ -1396,12 +1807,11 @@ void gui_set_runtime_ticks(uint32_t ticks) {
     if (!ready) return;
     if (ticks == runtime_ticks) return;
     runtime_ticks = ticks;
+    if ((ticks % ANIMATION_TICKS) == 0u) advance_window_animations();
     if ((ticks % 25u) == 0u && windows[4].visible && !windows[4].minimized)
         gui_request_redraw_rect(windows[4].x, windows[4].y, windows[4].w, windows[4].h);
-    if ((ticks % 100u) == 0u) {
-        /* Header clock is pushed by the kernel through gui_set_clock(). */
+    if ((ticks % 100u) == 0u)
         gui_request_redraw_rect(0, 0, (int)framebuffer_info()->width, TOPBAR_H);
-    }
 }
 
 void gui_set_clock(int hour, int minute, int second, int day, int month, int year) {

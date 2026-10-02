@@ -2262,6 +2262,9 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     gui_open_window(event - '1');
                     continue;
                 }
+            } else if (gui_console_enabled && gui_available() &&
+                       gui_keyboard_event(event, ctrl_down, shift_down)) {
+                continue;
             } else if (event >= 32 && event < 127) {
                 if (selection_anchor >= 0 && selection_anchor != cursor_pos) {
                     int a = selection_anchor, b = cursor_pos;
