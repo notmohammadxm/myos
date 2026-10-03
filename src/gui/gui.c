@@ -127,6 +127,7 @@ static void gui_request_redraw_rect(int x, int y, int w, int h);
 static void gui_request_terminal_redraw(void);
 static void launcher_reset_search(void);
 static void open_launcher_app(int index);
+static void launcher_record_recent(int index);
 static struct gui_window windows[WINDOW_COUNT];
 
 static int min_int(int a, int b) { return a < b ? a : b; }
