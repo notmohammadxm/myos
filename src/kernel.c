@@ -5,6 +5,7 @@
 #include "gui/gui.h"
 #include "drivers/mouse.h"
 #include "fs/fs.h"
+#include "net/net.h"
 
 /* ============================================================
  * MyOS v0.5 - desktop-style operating environment
