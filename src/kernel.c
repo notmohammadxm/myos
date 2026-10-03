@@ -1176,6 +1176,22 @@ static void cmd_fsinfo(void) {
     print(" bytes\n");
 }
 
+static void network_gui_update(void) {
+    net_status_t status;
+    gui_net_info_t snapshot;
+    net_get_status(&status);
+    snapshot.available = status.available;
+    snapshot.link_up = status.link_up;
+    for (int i = 0; i < 6; ++i) snapshot.mac[i] = status.mac[i];
+    snapshot.ip = status.ip;
+    snapshot.gateway = status.gateway;
+    snapshot.tx_packets = status.tx_packets;
+    snapshot.rx_packets = status.rx_packets;
+    snapshot.ping_success = status.ping_success;
+    snapshot.ping_fail = status.ping_fail;
+    gui_network_set_status(&snapshot);
+}
+
 static void filesystem_gui_update(void) {
     fs_entry_t entries[16];
     gui_file_info_t snapshot[16];
@@ -2550,6 +2566,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     fs_init();
     filesystem_gui_update();
     net_init();
+    network_gui_update();
     cpu_sti();
 
     prompt();
@@ -2711,6 +2728,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
             if ((timer_ticks % 25u) == 0u) {
                 scheduler_gui_update();
                 filesystem_gui_update();
+                network_gui_update();
             }
 
             gui_action_t action;
@@ -2734,6 +2752,16 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     log_event("Folder created from GUI");
                 } else if (action.type == GUI_ACTION_FILE_OPEN) {
                     fs_open_index(action.arg);
+                } else if (action.type == GUI_ACTION_NET_PING) {
+                    net_status_t status;
+                    net_get_status(&status);
+                    if (status.available) {
+                        if (net_ping_ipv4(status.gateway)) notify_add("Network ping succeeded");
+                        else notify_add("Network ping failed");
+                    } else {
+                        notify_add("Network driver unavailable");
+                    }
+                    network_gui_update();
                 } else if (action.type == GUI_ACTION_THEME) {
                     static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono", "light" };
                     int next_theme = 0;
