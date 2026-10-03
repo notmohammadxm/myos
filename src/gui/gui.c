@@ -521,6 +521,8 @@ static void draw_round_card(int x, int y, int width, int height, int radius,
         draw_round_rect(x + 1, y + 1, width - 2, height - 2, radius - 1, fill);
 }
 
+static void draw_uint_text(int x, int y, uint32_t value, uint32_t color);
+
 static void draw_ipv4_text(int x, int y, uint32_t ip, uint32_t color) {
     draw_uint_text(x, y, (ip >> 24) & 0xFFu, color); draw_text(x + 24, y, ".", color);
     draw_uint_text(x + 32, y, (ip >> 16) & 0xFFu, color); draw_text(x + 56, y, ".", color);
@@ -530,7 +532,7 @@ static void draw_ipv4_text(int x, int y, uint32_t ip, uint32_t color) {
 
 static void draw_uint_text(int x, int y, uint32_t value, uint32_t color);
 
-static void draw_uint_text(int x, int y, uint32_t value, uint32_t color);
+
 
 static void draw_text_centered(int x, int y, int width, const char* s, uint32_t color) {
     if (!s) return;
