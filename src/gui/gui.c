@@ -1819,6 +1819,15 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     (void)shift;
     if (!ready) return 0;
 
+    if (network_open) {
+        if (event == GUI_KEY_ESCAPE) { gui_network_close(); return 1; }
+        if (event == 'p' || event == '\n' || event == '\r') {
+            action_push(GUI_ACTION_NET_PING, 0);
+            return 1;
+        }
+        return 1;
+    }
+
     if (filemgr_open) {
         if (event == GUI_KEY_ESCAPE) { gui_filemgr_close(); return 1; }
         if (event == GUI_KEY_UP) {
@@ -1961,6 +1970,15 @@ void gui_init(void) {
     filemgr_open = 0;
     filemgr_selected = 0;
     file_count = 0;
+    network_open = 0;
+    network_status.available = 0;
+    network_status.link_up = 0;
+    network_status.ip = 0;
+    network_status.gateway = 0;
+    network_status.tx_packets = 0;
+    network_status.rx_packets = 0;
+    network_status.ping_success = 0;
+    network_status.ping_fail = 0;
     quick_settings_open = 0;
     notification_open = 1;
     notifications_cleared = 0;
@@ -2388,7 +2406,14 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     uint8_t released = (uint8_t)((new_buttons ^ mouse_prev_buttons) & mouse_prev_buttons);
 
     if (pressed & 1u) {
-        if (filemgr_open) {
+        if (network_open) {
+            if (network_pointer_ping()) {
+                action_push(GUI_ACTION_NET_PING, 0);
+            } else {
+                gui_network_close();
+            }
+            gui_request_redraw();
+        } else if (filemgr_open) {
             int row=filemgr_pointer_row(), button=filemgr_pointer_button();
             if(row>=0){filemgr_selected=row;gui_request_redraw();}
             else if(button==1){action_push_arg(GUI_ACTION_FILE_CREATE,0);gui_request_redraw();}
