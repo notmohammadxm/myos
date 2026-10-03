@@ -102,6 +102,7 @@ static gui_file_info_t file_data[16];
 static int file_count;
 static int network_open;
 static gui_net_info_t network_status;
+static int clock_24h = 1;
 static int quick_settings_open;
 static int panic_open;
 static int panic_code;
@@ -742,7 +743,12 @@ static void make_clock_text(char out[9]) {
         gui_strcopy(out, "--:--:--", 9);
         return;
     }
-    out[0]=(char)('0'+clock_hour/10); out[1]=(char)('0'+clock_hour%10); out[2]=':';
+    int hour = clock_hour;
+    if (!clock_24h) {
+        hour %= 12;
+        if (hour == 0) hour = 12;
+    }
+    out[0]=(char)('0'+hour/10); out[1]=(char)('0'+hour%10); out[2]=':';
     out[3]=(char)('0'+clock_minute/10); out[4]=(char)('0'+clock_minute%10); out[5]=':';
     out[6]=(char)('0'+clock_second/10); out[7]=(char)('0'+clock_second%10); out[8]=0;
 }
@@ -2039,6 +2045,22 @@ void gui_init(void) {
     cursor_drawn_x = cursor_drawn_y = 0;
     cursor_drawn_valid = 0;
     runtime_ticks = 0;
+    gui_request_redraw();
+}
+
+void gui_get_preferences(gui_preferences_t* out) {
+    if (!out) return;
+    out->notifications_enabled = notifications_enabled;
+    out->animations_enabled = animations_enabled;
+    out->clock_24h = clock_24h;
+}
+
+void gui_set_preferences(const gui_preferences_t* prefs) {
+    if (!ready || !prefs) return;
+    notifications_enabled = prefs->notifications_enabled ? 1 : 0;
+    animations_enabled = prefs->animations_enabled ? 1 : 0;
+    clock_24h = prefs->clock_24h ? 1 : 0;
+    if (!animations_enabled) finish_all_window_animations();
     gui_request_redraw();
 }
 
