@@ -21,6 +21,8 @@ static struct fs_node nodes[FS_MAX_FILES];
 static int fs_ready;
 static int fs_persistent;
 
+int fs_count(void);
+
 static size_t fs_strlen(const char* s) {
     size_t n = 0;
     while (s && s[n]) ++n;
