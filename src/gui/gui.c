@@ -89,7 +89,7 @@ static int launcher_open;
 static int launcher_selected;
 static int launcher_query_len;
 static char launcher_query[32];
-static int recent_apps[5] = { 0, 1, 2, 3, 4 };
+static int recent_apps[6] = { 0, 1, 2, 3, 4, 5 };
 static int quick_settings_open;
 static int notification_open = 1;
 static int notifications_enabled = 1;
@@ -121,6 +121,8 @@ static int window_order[WINDOW_COUNT] = { 1, 2, 3, 4, 0 };
 static void gui_request_redraw(void);
 static void gui_request_redraw_rect(int x, int y, int w, int h);
 static void gui_request_terminal_redraw(void);
+static void launcher_reset_search(void);
+static void open_launcher_app(int index);
 static struct gui_window windows[WINDOW_COUNT];
 
 static int min_int(int a, int b) { return a < b ? a : b; }
@@ -514,6 +516,17 @@ static void draw_text_centered(int x, int y, int width, const char* s, uint32_t 
     draw_text(x + max_int(0, (width - tw) / 2), y, s, color);
 }
 
+static void draw_uint_text(int x, int y, uint32_t value, uint32_t color) {
+    char digits[10];
+    int n = 0;
+    if (value == 0) digits[n++] = '0';
+    while (value && n < (int)sizeof(digits)) {
+        digits[n++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    for (int i = 0; i < n; ++i) draw_char(x + i * FONT_W, y, digits[n - i - 1], color);
+}
+
 static void draw_soft_divider(int x, int y, int width, uint32_t color) {
     if (width <= 0) return;
     renderer_rect(x, y, width, 1, color);
@@ -850,7 +863,7 @@ static int launcher_match_count(void) {
     };
     int count = 0;
     for (int pos = 0; pos < 6; ++pos) {
-        int index = recent_apps[pos < 6 ? pos : 0];
+        int index = recent_apps[pos];
         if (index < 0 || index >= 6) continue;
         if (launcher_contains(names[index], launcher_query) ||
             launcher_contains(desc[index], launcher_query)) ++count;
@@ -1400,6 +1413,58 @@ static void draw_task_manager(void) {
     draw_text(x + 20, y + height - 48, "UP/DOWN SELECT   C CPU   M MEMORY   N NAME   X TERMINATE   R RESTART   ESC CLOSE", muted);
 }
 
+static void taskmgr_sort_data(void) {
+    for(int i=0;i<task_count;++i) task_order[i]=i;
+    for(int i=0;i<task_count;++i) for(int j=i+1;j<task_count;++j) {
+        int a=task_order[i], b=task_order[j], swap=0;
+        if(taskmgr_sort_mode==1) swap=task_data[b].cpu_percent>task_data[a].cpu_percent;
+        else if(taskmgr_sort_mode==2) swap=task_data[b].memory_kib>task_data[a].memory_kib;
+        else if(taskmgr_sort_mode==3) swap=task_data[b].priority>task_data[a].priority;
+        else swap=task_data[b].pid<task_data[a].pid;
+        if(swap){int t=task_order[i];task_order[i]=task_order[j];task_order[j]=t;}
+    }
+    if(taskmgr_selected>=task_count) taskmgr_selected=max_int(0,task_count-1);
+}
+
+void gui_taskmgr_set_data(const gui_task_info_t* tasks,int count){
+    if(!ready || !tasks) return;
+    task_count=max_int(0,min_int(count,8));
+    for(int i=0;i<task_count;++i) task_data[i]=tasks[i];
+    taskmgr_sort_data();
+    gui_request_redraw();
+}
+
+void gui_taskmgr_open(void){
+    if(!ready)return;
+    taskmgr_open=1; taskmgr_selected=0; taskmgr_sort_mode=0;
+    launcher_open=0; quick_settings_open=0; notification_open=0; power_open=0; focused_window=-1;
+    taskmgr_sort_data(); gui_request_redraw();
+}
+
+static void gui_taskmgr_close(void){taskmgr_open=0; notification_open=0; gui_request_redraw();}
+
+static int taskmgr_pointer_row(void){
+    const framebuffer_info_t* f=framebuffer_info(); if(!f||!taskmgr_open)return -1;
+    int w=720,h=430; if((int)f->width<w+24)w=(int)f->width-24; if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    if(h<320)h=320;
+    int x=((int)f->width-w)/2, y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
+    if(mouse_x_pos<x+18||mouse_x_pos>=x+w-18||mouse_y_pos<y+100)return -1;
+    int row=(mouse_y_pos-y-100)/34;
+    if(row<0||row>=task_count||row>=8||(mouse_y_pos-y-100)%34>=30)return -1;
+    return row;
+}
+
+static int taskmgr_pointer_button(void){
+    const framebuffer_info_t* f=framebuffer_info(); if(!f||!taskmgr_open)return 0;
+    int w=720,h=430; if((int)f->width<w+24)w=(int)f->width-24; if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    if(h<320)return 0;
+    int x=((int)f->width-w)/2, y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
+    if(mouse_y_pos<y+h-78||mouse_y_pos>=y+h-48)return 0;
+    if(mouse_x_pos>=x+18&&mouse_x_pos<x+124)return 1;
+    if(mouse_x_pos>=x+132&&mouse_x_pos<x+238)return 2;
+    return 0;
+}
+
 static void draw_power_menu(void) {
     if (!power_open) return;
     const framebuffer_info_t* f = framebuffer_info();
@@ -1641,9 +1706,7 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
         if (event == '\n' || event == '\r') {
             if (matches > 0) {
                 int index = launcher_match_at(launcher_selected);
-                launcher_open = 0;
-                launcher_reset_search();
-                open_window(index);
+                open_launcher_app(index);
             }
             return 1;
         }
@@ -1756,7 +1819,7 @@ void gui_init(void) {
     launcher_selected = 0;
     launcher_query_len = 0;
     launcher_query[0] = 0;
-    for (int i = 0; i < 5; ++i) recent_apps[i] = i;
+    for (int i = 0; i < 6; ++i) recent_apps[i] = i;
     quick_settings_open = 0;
     notification_open = 1;
     notifications_cleared = 0;
@@ -1951,6 +2014,7 @@ void gui_redraw(void) {
         else draw_monitor(&windows[idx]);
     }
 
+    draw_task_manager();
     draw_notification();
     draw_power_menu();
     draw_quick_settings();
