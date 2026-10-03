@@ -107,6 +107,8 @@ static char line[LINE_MAX];
 static int line_len = 0;
 static int cursor_pos = 0;
 static int selection_anchor = -1;
+static char clipboard[LINE_MAX];
+static int clipboard_len;
 
 static char history[HISTORY_COUNT][LINE_MAX];
 static int history_count = 0;
@@ -1606,6 +1608,40 @@ static void line_editor_ensure_visible(void) {
     }
 }
 
+static void clipboard_copy_selection(int cut) {
+    if (selection_anchor < 0 || selection_anchor == cursor_pos) return;
+    int a = selection_anchor;
+    int b = cursor_pos;
+    if (a > b) { int t = a; a = b; b = t; }
+    clipboard_len = b - a;
+    if (clipboard_len > LINE_MAX - 1) clipboard_len = LINE_MAX - 1;
+    for (int i = 0; i < clipboard_len; ++i) clipboard[i] = line[a + i];
+    clipboard[clipboard_len] = 0;
+    if (cut) {
+        for (int i = a; i < line_len - clipboard_len; ++i)
+            line[i] = line[i + clipboard_len];
+        line_len -= clipboard_len;
+        cursor_pos = a;
+        selection_anchor = -1;
+        redraw_line();
+    }
+}
+
+static void clipboard_paste(void) {
+    if (clipboard_len <= 0) return;
+    int room = (LINE_MAX - 1) - line_len;
+    int take = clipboard_len < room ? clipboard_len : room;
+    if (take <= 0) return;
+    for (int i = line_len; i >= cursor_pos; --i)
+        line[i + take] = line[i];
+    for (int i = 0; i < take; ++i)
+        line[cursor_pos + i] = clipboard[i];
+    line_len += take;
+    cursor_pos += take;
+    selection_anchor = -1;
+    redraw_line();
+}
+
 static void line_editor_set_cursor(void) {
     if (gui_console_enabled && gui_available()) {
         gui_terminal_set_cursor(cursor_pos);
@@ -2624,6 +2660,24 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 gui_keyboard_event(event, ctrl_down, shift_down)) {
                 continue;
             }
+
+            if (ctrl_down) {
+                int ctrl_char = event;
+                if (ctrl_char >= 'A' && ctrl_char <= 'Z') ctrl_char += 'a' - 'A';
+                if (ctrl_char == 'c') {
+                    clipboard_copy_selection(0);
+                    continue;
+                }
+                if (ctrl_char == 'x') {
+                    clipboard_copy_selection(1);
+                    continue;
+                }
+                if (ctrl_char == 'v') {
+                    clipboard_paste();
+                    continue;
+                }
+            }
+
             if (event == KEY_UP) {
                 if (history_count > 0 && history_cursor > 0) {
                     --history_cursor;
