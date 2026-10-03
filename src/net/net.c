@@ -136,10 +136,6 @@ static int find_rtl8139(void) {
     return 0;
 }
 
-static uint16_t swap16(uint16_t value) {
-    return (uint16_t)((value << 8) | (value >> 8));
-}
-
 static uint16_t checksum16(const uint8_t* data, uint32_t length) {
     uint32_t sum = 0;
     for (uint32_t i = 0; i + 1 < length; i += 2)
