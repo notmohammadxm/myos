@@ -530,6 +530,8 @@ static void draw_ipv4_text(int x, int y, uint32_t ip, uint32_t color) {
 
 static void draw_uint_text(int x, int y, uint32_t value, uint32_t color);
 
+static void draw_uint_text(int x, int y, uint32_t value, uint32_t color);
+
 static void draw_text_centered(int x, int y, int width, const char* s, uint32_t color) {
     if (!s) return;
     int tw = (int)gui_strlen(s) * FONT_W;
