@@ -521,6 +521,13 @@ static void draw_round_card(int x, int y, int width, int height, int radius,
         draw_round_rect(x + 1, y + 1, width - 2, height - 2, radius - 1, fill);
 }
 
+static void draw_ipv4_text(int x, int y, uint32_t ip, uint32_t color) {
+    draw_uint_text(x, y, (ip >> 24) & 0xFFu, color); draw_text(x + 24, y, ".", color);
+    draw_uint_text(x + 32, y, (ip >> 16) & 0xFFu, color); draw_text(x + 56, y, ".", color);
+    draw_uint_text(x + 64, y, (ip >> 8) & 0xFFu, color); draw_text(x + 88, y, ".", color);
+    draw_uint_text(x + 96, y, ip & 0xFFu, color);
+}
+
 static void draw_text_centered(int x, int y, int width, const char* s, uint32_t color) {
     if (!s) return;
     int tw = (int)gui_strlen(s) * FONT_W;
@@ -1410,9 +1417,9 @@ static void draw_network_manager(void) {
 
     draw_round_card(x + 18, y + 120, width - 36, 48, 12, bg, border);
     draw_text(x + 32, y + 132, "IP", muted);
-    draw_text(x + 116, y + 132, "10.0.2.15", text);
+    draw_ipv4_text(x + 116, y + 132, network_status.ip, text);
     draw_text(x + 302, y + 132, "GW", muted);
-    draw_text(x + 362, y + 132, "10.0.2.2", text);
+    draw_ipv4_text(x + 362, y + 132, network_status.gateway, text);
 
     draw_round_card(x + 18, y + 176, width - 36, 48, 12, bg, border);
     draw_text(x + 32, y + 188, "TRAFFIC", muted);
