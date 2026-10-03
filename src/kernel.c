@@ -1268,18 +1268,17 @@ static void fs_create_default(int directory) {
 
 static void fs_open_index(int index) {
     fs_entry_t entry;
-    if (!fs_stat("/", &entry)) return;
-    if (index < 0 || !fs_stat(fs_data(index) ? fs_data(index) : "/", &entry)) {
-        fs_entry_t list[FS_MAX_FILES];
-        int count = fs_list(list, FS_MAX_FILES);
-        for (int i = 0; i < count; ++i) {
-            if (list[i].index == index) {
-                entry = list[i];
-                break;
-            }
+    fs_entry_t list[FS_MAX_FILES];
+    int count = fs_list(list, FS_MAX_FILES);
+    int found = 0;
+    for (int i = 0; i < count; ++i) {
+        if (list[i].index == index) {
+            entry = list[i];
+            found = 1;
+            break;
         }
     }
-    if (entry.index != index || entry.directory) return;
+    if (!found || entry.directory) return;
     char data[FS_DATA_MAX];
     int n = fs_read(entry.name, data, sizeof(data));
     gui_open_window(0);
