@@ -479,6 +479,10 @@ int net_udp_send(uint32_t destination, uint16_t source_port, uint16_t destinatio
     return rtl_send(frame, (uint16_t)(14u + ip_len));
 }
 
+int net_available(void) {
+    return ready != 0;
+}
+
 void net_get_status(net_status_t* out) {
     if (!out) return;
     out->available = ready;
