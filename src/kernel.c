@@ -1176,6 +1176,65 @@ static void cmd_fsinfo(void) {
     print(" bytes\n");
 }
 
+static void filesystem_gui_update(void) {
+    fs_entry_t entries[16];
+    gui_file_info_t snapshot[16];
+    int count = fs_list(entries, 16);
+    for (int i = 0; i < count; ++i) {
+        snapshot[i].index = entries[i].index;
+        str_copy(snapshot[i].name, entries[i].name, (int)sizeof(snapshot[i].name));
+        snapshot[i].directory = entries[i].directory;
+        snapshot[i].size = entries[i].size;
+    }
+    gui_filemgr_set_data(snapshot, count);
+}
+
+static void fs_create_default(int directory) {
+    static const char* file_names[] = {
+        "/home/newfile.txt", "/home/newfile2.txt", "/home/newfile3.txt",
+        "/desktop/newfile.txt", "/downloads/newfile.txt"
+    };
+    static const char* dir_names[] = {
+        "/home/newfolder", "/home/newfolder2", "/desktop/newfolder"
+    };
+    const char** names = directory ? dir_names : file_names;
+    int count = directory ? (int)(sizeof(dir_names) / sizeof(dir_names[0]))
+                          : (int)(sizeof(file_names) / sizeof(file_names[0]));
+    for (int i = 0; i < count; ++i) {
+        int result = directory ? fs_create_dir(names[i]) : fs_create_file(names[i]);
+        if (result >= 0) {
+            if (!directory) fs_write(names[i], "", 0);
+            return;
+        }
+    }
+}
+
+static void fs_open_index(int index) {
+    fs_entry_t entry;
+    if (!fs_stat("/", &entry)) return;
+    if (index < 0 || !fs_stat(fs_data(index) ? fs_data(index) : "/", &entry)) {
+        fs_entry_t list[FS_MAX_FILES];
+        int count = fs_list(list, FS_MAX_FILES);
+        for (int i = 0; i < count; ++i) {
+            if (list[i].index == index) {
+                entry = list[i];
+                break;
+            }
+        }
+    }
+    if (entry.index != index || entry.directory) return;
+    char data[FS_DATA_MAX];
+    int n = fs_read(entry.name, data, sizeof(data));
+    gui_open_window(0);
+    print("\n--- ");
+    print(entry.name);
+    print(" ---\n");
+    if (n >= 0) print(data);
+    else print("Unable to read file.");
+    putc('\n');
+    prompt();
+}
+
 /* ---------- Settings / profile ---------- */
 
 static int valid_name(const char* s, int max_len) {
@@ -2462,6 +2521,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     notify_add("MyOS boot completed");
     scheduler_init();
     fs_init();
+    filesystem_gui_update();
     cpu_sti();
 
     prompt();
@@ -2620,7 +2680,10 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 line_editor_set_cursor();
             }
 
-            if ((timer_ticks % 25u) == 0u) scheduler_gui_update();
+            if ((timer_ticks % 25u) == 0u) {
+                scheduler_gui_update();
+                filesystem_gui_update();
+            }
 
             gui_action_t action;
             while (gui_poll_action(&action)) {
@@ -2630,6 +2693,19 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     if (!scheduler_control((uint32_t)action.arg, 1)) log_event("Task terminate rejected");
                 } else if (action.type == GUI_ACTION_TASK_RESTART) {
                     if (!scheduler_control((uint32_t)action.arg, 0)) log_event("Task restart rejected");
+                } else if (action.type == GUI_ACTION_FILE_DELETE) {
+                    if (fs_delete_index(action.arg)) {
+                        log_event("File deleted from GUI");
+                        notify_add("File deleted");
+                    }
+                } else if (action.type == GUI_ACTION_FILE_CREATE) {
+                    fs_create_default(0);
+                    log_event("File created from GUI");
+                } else if (action.type == GUI_ACTION_DIR_CREATE) {
+                    fs_create_default(1);
+                    log_event("Folder created from GUI");
+                } else if (action.type == GUI_ACTION_FILE_OPEN) {
+                    fs_open_index(action.arg);
                 } else if (action.type == GUI_ACTION_THEME) {
                     static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono", "light" };
                     int next_theme = 0;
