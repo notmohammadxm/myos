@@ -999,6 +999,9 @@ static int cpu_family(uint8_t* out_family) {
     return 1;
 }
 
+struct acpi_fadt;
+static struct acpi_fadt* acpi_find_fadt(void);
+
 static void cmd_hardware(void) {
     const framebuffer_info_t* f = framebuffer_info();
     net_status_t net;
