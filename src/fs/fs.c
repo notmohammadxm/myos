@@ -12,9 +12,9 @@ struct fs_node {
 static struct fs_node nodes[FS_MAX_FILES];
 static int fs_ready;
 
-static int fs_create_file(const char* path);
-static int fs_create_dir(const char* path);
-static int fs_write(const char* path, const char* data, uint32_t len);
+int fs_create_file(const char* path);
+int fs_create_dir(const char* path);
+int fs_write(const char* path, const char* data, uint32_t len);
 
 static size_t fs_strlen(const char* s) {
     size_t n = 0;

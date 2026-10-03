@@ -921,11 +921,7 @@ static void open_launcher_app(int index) {
     if (index >= 0 && index < WINDOW_COUNT) open_window(index);
 }
 
-static void launcher_reset_search(void) {
-    launcher_query[0] = 0;
-    launcher_query_len = 0;
-    launcher_selected = 0;
-}
+
 
 static void launcher_toggle(void) {
     launcher_open = !launcher_open;
