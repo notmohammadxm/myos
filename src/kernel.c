@@ -31,6 +31,9 @@ static volatile uint16_t unit_test_vga[VGA_CELLS];
 #define HISTORY_COUNT   16
 #define LOG_COUNT       32
 #define LOG_LEN         96
+#define PROCESS_MAX     8
+#define SCHED_QUANTUM   5
+#define SCHED_SAMPLE    100
 #define NOTIFY_COUNT    8
 #define NOTIFY_LEN      80
 
@@ -66,6 +69,33 @@ static volatile uint16_t kbd_head = 0;
 static volatile uint16_t kbd_tail = 0;
 
 static volatile uint32_t timer_ticks = 0;
+
+enum process_state {
+    PROCESS_READY = 0,
+    PROCESS_RUNNING = 1,
+    PROCESS_SLEEPING = 2,
+    PROCESS_BLOCKED = 3,
+    PROCESS_TERMINATED = 4
+};
+
+struct kernel_process {
+    uint32_t pid;
+    char name[20];
+    enum process_state state;
+    uint32_t cpu_ticks;
+    uint32_t sample_cpu_ticks;
+    uint32_t runs;
+    uint16_t memory_kib;
+    uint8_t priority;
+    uint8_t cpu_percent;
+};
+
+static struct kernel_process processes[PROCESS_MAX];
+static int process_count;
+static int scheduler_current = -1;
+static uint32_t scheduler_slice_ticks;
+static uint32_t scheduler_sample_tick;
+static uint32_t next_pid = 1;
 static volatile uint8_t shift_down = 0;
 static volatile uint8_t ctrl_down = 0;
 static volatile uint8_t caps_lock = 0;
@@ -233,6 +263,132 @@ static void str_copy(char* dst, const char* src, int max_len) {
     }
     dst[i] = 0;
 }
+
+static const char* process_state_name(enum process_state state) {
+    if (state == PROCESS_RUNNING) return "RUNNING";
+    if (state == PROCESS_SLEEPING) return "SLEEPING";
+    if (state == PROCESS_BLOCKED) return "BLOCKED";
+    if (state == PROCESS_TERMINATED) return "TERMINATED";
+    return "READY";
+}
+
+static int process_find(uint32_t pid) {
+    for (int i = 0; i < process_count; ++i)
+        if (processes[i].pid == pid) return i;
+    return -1;
+}
+
+static int process_add(const char* name, enum process_state state,
+                       uint16_t memory_kib, uint8_t priority) {
+    if (process_count >= PROCESS_MAX || !name) return -1;
+    int i = process_count++;
+    processes[i].pid = next_pid++;
+    str_copy(processes[i].name, name, (int)sizeof(processes[i].name));
+    processes[i].state = state;
+    processes[i].cpu_ticks = 0;
+    processes[i].sample_cpu_ticks = 0;
+    processes[i].runs = 0;
+    processes[i].memory_kib = memory_kib;
+    processes[i].priority = priority;
+    processes[i].cpu_percent = 0;
+    return i;
+}
+
+static int scheduler_choose_next(void) {
+    if (process_count <= 0) return -1;
+    for (int offset = 1; offset <= process_count; ++offset) {
+        int i = (scheduler_current + offset + process_count) % process_count;
+        if (processes[i].state == PROCESS_READY) return i;
+    }
+    for (int i = 0; i < process_count; ++i)
+        if (processes[i].state == PROCESS_READY) return i;
+    return -1;
+}
+
+static void scheduler_switch(void) {
+    if (scheduler_current >= 0 && scheduler_current < process_count &&
+        processes[scheduler_current].state == PROCESS_RUNNING)
+        processes[scheduler_current].state = PROCESS_READY;
+
+    int next = scheduler_choose_next();
+    scheduler_current = next;
+    scheduler_slice_ticks = 0;
+    if (next >= 0) {
+        processes[next].state = PROCESS_RUNNING;
+        ++processes[next].runs;
+    }
+}
+
+static void scheduler_tick(void) {
+    if (process_count <= 0) return;
+
+    if (scheduler_current < 0 || scheduler_current >= process_count ||
+        processes[scheduler_current].state != PROCESS_RUNNING)
+        scheduler_switch();
+
+    if (scheduler_current >= 0 && processes[scheduler_current].state == PROCESS_RUNNING) {
+        ++processes[scheduler_current].cpu_ticks;
+        ++scheduler_slice_ticks;
+        if (scheduler_slice_ticks >= SCHED_QUANTUM) scheduler_switch();
+    }
+
+    if ((uint32_t)(timer_ticks - scheduler_sample_tick) >= SCHED_SAMPLE) {
+        scheduler_sample_tick = timer_ticks;
+        for (int i = 0; i < process_count; ++i) {
+            uint32_t delta = processes[i].cpu_ticks - processes[i].sample_cpu_ticks;
+            processes[i].cpu_percent = (uint8_t)(delta > 100u ? 100u : delta);
+            processes[i].sample_cpu_ticks = processes[i].cpu_ticks;
+        }
+    }
+}
+
+static void scheduler_init(void) {
+    process_count = 0;
+    scheduler_current = -1;
+    scheduler_slice_ticks = 0;
+    scheduler_sample_tick = 0;
+    next_pid = 1;
+    process_add("kernel", PROCESS_READY, 128, 5);
+    process_add("terminal", PROCESS_READY, 64, 4);
+    process_add("monitor", PROCESS_READY, 48, 3);
+    process_add("calculator", PROCESS_READY, 36, 3);
+    process_add("settings", PROCESS_READY, 32, 2);
+    process_add("logger", PROCESS_READY, 24, 2);
+    process_add("notifier", PROCESS_READY, 24, 2);
+    process_add("rtc", PROCESS_READY, 16, 1);
+    scheduler_switch();
+}
+
+static int scheduler_control(uint32_t pid, int terminate) {
+    int i = process_find(pid);
+    if (i < 0 || processes[i].pid == 1u) return 0;
+    if (terminate) {
+        processes[i].state = PROCESS_TERMINATED;
+        if (i == scheduler_current) scheduler_switch();
+    } else {
+        processes[i].state = PROCESS_READY;
+        processes[i].cpu_percent = 0;
+        if (scheduler_current < 0) scheduler_switch();
+    }
+    return 1;
+}
+
+static void scheduler_gui_update(void) {
+    gui_task_info_t snapshot[PROCESS_MAX];
+    int count = process_count;
+    if (count > PROCESS_MAX) count = PROCESS_MAX;
+    for (int i = 0; i < count; ++i) {
+        snapshot[i].pid = (int)processes[i].pid;
+        snapshot[i].name = processes[i].name;
+        snapshot[i].state = process_state_name(processes[i].state);
+        snapshot[i].cpu_percent = (int)processes[i].cpu_percent;
+        snapshot[i].memory_kib = (int)processes[i].memory_kib;
+        snapshot[i].priority = (int)processes[i].priority;
+    }
+    gui_taskmgr_set_data(snapshot, count);
+}
+
+
 
 static void print(const char* s);
 static void draw_banner(void);
@@ -868,43 +1024,69 @@ static void cmd_memory(void) {
 
 /* ---------- Task manager ---------- */
 
-struct task_info {
-    const char* name;
-    const char* state;
-    const char* kind;
-};
-
-static const struct task_info tasks[] = {
-    { "kernel",   "RUNNING", "core" },
-    { "shell",    "RUNNING", "service" },
-    { "timer",    "ACTIVE",  "IRQ0" },
-    { "keyboard", "ACTIVE",  "IRQ1" },
-    { "rtc",      "READY",   "device" },
-    { "logger",   "READY",   "service" },
-    { "notify",   "READY",   "service" }
-};
-
 static void cmd_taskmgr(void) {
     print("MyOS Task Manager\n");
     print("-----------------\n");
-    print("Name        State    Type\n");
-    print("-----------------------------\n");
-    for (size_t i = 0; i < sizeof(tasks) / sizeof(tasks[0]); ++i) {
-        print(tasks[i].name);
-        int pad = 12 - (int)str_len(tasks[i].name);
+    print("PID  NAME                 STATE       CPU  MEM  PRIO\n");
+    print("----------------------------------------------------\n");
+    for (int i = 0; i < process_count; ++i) {
+        print_uint(processes[i].pid);
+        print("    ");
+        print(processes[i].name);
+        int pad = 21 - (int)str_len(processes[i].name);
         while (pad-- > 0) putc(' ');
-        print(tasks[i].state);
-        int pad2 = 9 - (int)str_len(tasks[i].state);
-        while (pad2-- > 0) putc(' ');
-        print(tasks[i].kind);
+        print(process_state_name(processes[i].state));
+        print("    ");
+        print_uint(processes[i].cpu_percent);
+        print("%   ");
+        print_uint(processes[i].memory_kib);
+        print("K   ");
+        print_uint(processes[i].priority);
         putc('\n');
     }
-    print("\nNote: these are kernel services, not user processes yet.\n");
-    print("Ticks: ");
-    print_uint(timer_ticks);
+    print("\nRound-robin quantum: ");
+    print_uint(SCHED_QUANTUM);
+    print(" ticks\n");
+    print("Scheduler runs: ");
+    if (scheduler_current >= 0) print_uint(processes[scheduler_current].runs);
+    else print("0");
     putc('\n');
 }
 
+static void cmd_taskmgr_control(const char* arg) {
+    while (*arg == ' ') ++arg;
+    if (!*arg) {
+        cmd_taskmgr();
+        return;
+    }
+    if (starts_with(arg, "terminate ")) {
+        uint32_t pid = 0;
+        int found = 0;
+        arg += 10;
+        while (*arg >= '0' && *arg <= '9') {
+            pid = pid * 10u + (uint32_t)(*arg - '0');
+            found = 1;
+            ++arg;
+        }
+        if (found && !*arg && scheduler_control(pid, 1)) print("Task terminated.\n");
+        else print("Cannot terminate task.\n");
+        return;
+    }
+    if (starts_with(arg, "restart ")) {
+        uint32_t pid = 0;
+        int found = 0;
+        arg += 8;
+        while (*arg >= '0' && *arg <= '9') {
+            pid = pid * 10u + (uint32_t)(*arg - '0');
+            found = 1;
+            ++arg;
+        }
+        if (found && !*arg && scheduler_control(pid, 0)) print("Task restarted.\n");
+        else print("Cannot restart task.\n");
+        return;
+    }
+    print("Usage: taskmgr | taskmgr terminate PID | taskmgr restart PID\n");
+}
 /* ---------- Settings / profile ---------- */
 
 static int valid_name(const char* s, int max_len) {
@@ -1830,6 +2012,11 @@ static void execute(const char* cmd) {
     else if (streq(cmd, "clock")) cmd_clock();
     else if (streq(cmd, "calendar")) cmd_calendar();
     else if (streq(cmd, "taskmgr")) cmd_taskmgr();
+    else if (starts_with(cmd, "taskmgr ")) {
+        const char* arg;
+        command_arg_after(cmd, 8, &arg);
+        cmd_taskmgr_control(arg);
+    }
     else if (streq(cmd, "settings")) cmd_settings();
     else if (starts_with(cmd, "set ")) {
         const char* arg;
@@ -1931,6 +2118,7 @@ static char kbd_translate(uint8_t sc) {
 
 void irq0_handler(void) {
     ++timer_ticks;
+    scheduler_tick();
     pic_eoi(0);
 }
 
@@ -2162,6 +2350,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
 
     log_event("MyOS boot complete");
     notify_add("MyOS boot completed");
+    scheduler_init();
     cpu_sti();
 
     prompt();
@@ -2320,11 +2509,17 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 line_editor_set_cursor();
             }
 
+            if ((timer_ticks % 25u) == 0u) scheduler_gui_update();
+
             gui_action_t action;
             while (gui_poll_action(&action)) {
                 if (action.type == GUI_ACTION_REBOOT) execute("reboot");
                 else if (action.type == GUI_ACTION_SHUTDOWN) execute("shutdown");
-                else if (action.type == GUI_ACTION_THEME) {
+                else if (action.type == GUI_ACTION_TASK_TERMINATE) {
+                    if (!scheduler_control((uint32_t)action.arg, 1)) log_event("Task terminate rejected");
+                } else if (action.type == GUI_ACTION_TASK_RESTART) {
+                    if (!scheduler_control((uint32_t)action.arg, 0)) log_event("Task restart rejected");
+                } else if (action.type == GUI_ACTION_THEME) {
                     static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono", "light" };
                     int next_theme = 0;
                     for (size_t i = 0; i < sizeof(gui_theme_names) / sizeof(gui_theme_names[0]); ++i) {
