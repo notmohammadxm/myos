@@ -1023,7 +1023,9 @@ static void cmd_hardware(void) {
     print("Mouse:       "); print(mouse_available() ? "PS/2 ready" : "unavailable"); putc('\n');
     print("ACPI:        "); print(acpi_find_fadt() ? "detected" : "not detected"); putc('\n');
     print("Network:     "); print(net.available ? "RTL8139 ready" : "unavailable"); putc('\n');
-    print("Filesystem:  "); print(fs_available() ? "RAMFS ready" : "unavailable"); putc('\n');
+    print("Filesystem:  ");
+    print(fs_available() ? (fs_persistent_storage() ? "disk-backed" : "RAMFS fallback") : "unavailable");
+    putc('\n');
     print("Scheduler:   "); print_uint((uint32_t)process_count); print(" tasks / RR ");
     print_uint(SCHED_QUANTUM); print(" tick quantum\n");
 }
@@ -2857,17 +2859,23 @@ void kernel_main(uint32_t magic, void* mb_info) {
     log_event("MyOS boot complete");
     notify_add("MyOS boot completed");
     scheduler_init();
-    fs_init();
-    filesystem_gui_update();
-    net_init();
-    network_gui_update();
-    logs_gui_update();
     ata_init();
     if (ata_available()) debug_write("MYOS_ATA_READY\n");
     else debug_write("MYOS_ATA_UNAVAILABLE\n");
+    fs_init();
+    filesystem_gui_update();
+    if (fs_persistent_storage()) debug_write("MYOS_FS_PERSISTENT\n");
+    else debug_write("MYOS_FS_RAM\n");
+    net_init();
+    network_gui_update();
+    logs_gui_update();
     settings_init();
+    if (!settings_persistent() && ata_available() && ata_sector_count() > 9u)
+        (void)settings_format(8u);
     if (settings_load(&runtime_settings)) settings_apply_loaded(&runtime_settings);
     saved_settings = runtime_settings;
+    if (settings_persistent()) debug_write("MYOS_SETTINGS_PERSISTENT\n");
+    else debug_write("MYOS_SETTINGS_VOLATILE\n");
     debug_write("MYOS_READY\n");
     if (net_available()) debug_write("MYOS_NET_READY\n");
     else debug_write("MYOS_NET_UNAVAILABLE\n");
