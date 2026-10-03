@@ -1217,6 +1217,17 @@ static void cmd_fsinfo(void) {
     print(" bytes\n");
 }
 
+static void logs_gui_update(void) {
+    gui_log_entry_t snapshot[LOG_COUNT];
+    int count = log_count;
+    if (count > LOG_COUNT) count = LOG_COUNT;
+    for (int i = 0; i < count; ++i) {
+        int index = (log_head + LOG_COUNT - count + i) % LOG_COUNT;
+        snapshot[i].text = logs[index];
+    }
+    gui_log_set_data(snapshot, count);
+}
+
 static void network_gui_update(void) {
     net_status_t status;
     gui_net_info_t snapshot;
@@ -2850,6 +2861,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     filesystem_gui_update();
     net_init();
     network_gui_update();
+    logs_gui_update();
     ata_init();
     if (ata_available()) debug_write("MYOS_ATA_READY\n");
     else debug_write("MYOS_ATA_UNAVAILABLE\n");
@@ -3039,6 +3051,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 scheduler_gui_update();
                 filesystem_gui_update();
                 network_gui_update();
+                logs_gui_update();
                 settings_snapshot(&runtime_settings);
                 if (settings_persistent() && !settings_equal(&runtime_settings,&saved_settings))
                     settings_save_runtime();
