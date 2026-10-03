@@ -12,6 +12,8 @@ typedef struct {
 
 int mouse_init(void);
 void mouse_set_bounds(uint32_t width, uint32_t height);
+void mouse_set_sensitivity(uint8_t percent);
+uint8_t mouse_get_sensitivity(void);
 int mouse_available(void);
 int mouse_poll(mouse_event_t* event);
 int32_t mouse_x(void);

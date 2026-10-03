@@ -102,6 +102,7 @@ static gui_file_info_t file_data[16];
 static int file_count;
 static int network_open;
 static gui_net_info_t network_status;
+static int clock_24h = 1;
 static int quick_settings_open;
 static int panic_open;
 static int panic_code;
@@ -520,6 +521,13 @@ static void draw_round_card(int x, int y, int width, int height, int radius,
         draw_round_rect(x + 1, y + 1, width - 2, height - 2, radius - 1, fill);
 }
 
+static void draw_ipv4_text(int x, int y, uint32_t ip, uint32_t color) {
+    draw_uint_text(x, y, (ip >> 24) & 0xFFu, color); draw_text(x + 24, y, ".", color);
+    draw_uint_text(x + 32, y, (ip >> 16) & 0xFFu, color); draw_text(x + 56, y, ".", color);
+    draw_uint_text(x + 64, y, (ip >> 8) & 0xFFu, color); draw_text(x + 88, y, ".", color);
+    draw_uint_text(x + 96, y, ip & 0xFFu, color);
+}
+
 static void draw_text_centered(int x, int y, int width, const char* s, uint32_t color) {
     if (!s) return;
     int tw = (int)gui_strlen(s) * FONT_W;
@@ -742,7 +750,12 @@ static void make_clock_text(char out[9]) {
         gui_strcopy(out, "--:--:--", 9);
         return;
     }
-    out[0]=(char)('0'+clock_hour/10); out[1]=(char)('0'+clock_hour%10); out[2]=':';
+    int hour = clock_hour;
+    if (!clock_24h) {
+        hour %= 12;
+        if (hour == 0) hour = 12;
+    }
+    out[0]=(char)('0'+hour/10); out[1]=(char)('0'+hour%10); out[2]=':';
     out[3]=(char)('0'+clock_minute/10); out[4]=(char)('0'+clock_minute%10); out[5]=':';
     out[6]=(char)('0'+clock_second/10); out[7]=(char)('0'+clock_second%10); out[8]=0;
 }
@@ -1404,9 +1417,9 @@ static void draw_network_manager(void) {
 
     draw_round_card(x + 18, y + 120, width - 36, 48, 12, bg, border);
     draw_text(x + 32, y + 132, "IP", muted);
-    draw_text(x + 116, y + 132, "10.0.2.15", text);
+    draw_ipv4_text(x + 116, y + 132, network_status.ip, text);
     draw_text(x + 302, y + 132, "GW", muted);
-    draw_text(x + 362, y + 132, "10.0.2.2", text);
+    draw_ipv4_text(x + 362, y + 132, network_status.gateway, text);
 
     draw_round_card(x + 18, y + 176, width - 36, 48, 12, bg, border);
     draw_text(x + 32, y + 188, "TRAFFIC", muted);
@@ -2039,6 +2052,22 @@ void gui_init(void) {
     cursor_drawn_x = cursor_drawn_y = 0;
     cursor_drawn_valid = 0;
     runtime_ticks = 0;
+    gui_request_redraw();
+}
+
+void gui_get_preferences(gui_preferences_t* out) {
+    if (!out) return;
+    out->notifications_enabled = notifications_enabled;
+    out->animations_enabled = animations_enabled;
+    out->clock_24h = clock_24h;
+}
+
+void gui_set_preferences(const gui_preferences_t* prefs) {
+    if (!ready || !prefs) return;
+    notifications_enabled = prefs->notifications_enabled ? 1 : 0;
+    animations_enabled = prefs->animations_enabled ? 1 : 0;
+    clock_24h = prefs->clock_24h ? 1 : 0;
+    if (!animations_enabled) finish_all_window_animations();
     gui_request_redraw();
 }
 

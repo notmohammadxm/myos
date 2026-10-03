@@ -16,6 +16,7 @@ static volatile int32_t y;
 static volatile uint8_t buttons;
 static volatile int32_t max_x = 1023;
 static volatile int32_t max_y = 767;
+static volatile uint8_t sensitivity = 100;
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -65,6 +66,10 @@ static int aux_command(uint8_t command, uint8_t value) {
     return 1;
 }
 static void queue_event(int32_t dx, int32_t dy, int32_t wheel, uint8_t new_buttons) {
+    if (sensitivity < 25) sensitivity = 25;
+    if (sensitivity > 200) sensitivity = 200;
+    dx = (dx * (int32_t)sensitivity) / 100;
+    dy = (dy * (int32_t)sensitivity) / 100;
     uint8_t next = (uint8_t)((head + 1u) % MOUSE_IRQ_BUFFER);
     if (next == tail) return;
     x += dx;
@@ -137,6 +142,14 @@ int mouse_poll(mouse_event_t* event) {
     tail = (uint8_t)((tail + 1u) % MOUSE_IRQ_BUFFER);
     return 1;
 }
+
+void mouse_set_sensitivity(uint8_t percent) {
+    if (percent < 25u) percent = 25u;
+    if (percent > 200u) percent = 200u;
+    sensitivity = percent;
+}
+
+uint8_t mouse_get_sensitivity(void) { return sensitivity; }
 
 int32_t mouse_x(void) { return x; }
 int32_t mouse_y(void) { return y; }
