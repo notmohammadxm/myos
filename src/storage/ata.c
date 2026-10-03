@@ -125,7 +125,7 @@ int ata_write_sector(uint32_t lba, const uint8_t* data) {
 }
 
 int ata_storage_marker_present(uint32_t lba) {
-    uint8_t block[ATA_SECTOR_SIZE];
+    uint8_t block[ATA_SECTOR_SIZE] = {0};
     if (!ata_read_sector(lba, block)) return 0;
     uint32_t m = (uint32_t)block[0] | ((uint32_t)block[1] << 8) |
                  ((uint32_t)block[2] << 16) | ((uint32_t)block[3] << 24);
