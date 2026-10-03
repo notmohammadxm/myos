@@ -16,6 +16,7 @@ typedef struct {
 
 void fs_init(void);
 int fs_available(void);
+int fs_persistent_storage(void);
 int fs_count(void);
 int fs_list(fs_entry_t* out, int max_entries);
 int fs_create_file(const char* path);

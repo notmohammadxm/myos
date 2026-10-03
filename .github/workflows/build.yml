@@ -43,6 +43,17 @@ jobs:
           grep -q "MYOS_READY" qemu-debug.log
           grep -q "MYOS_NET_READY" qemu-debug.log
           grep -q "MYOS_ATA_READY" qemu-debug.log
+          grep -q "MYOS_FS_PERSISTENT" qemu-debug.log
+          grep -q "MYOS_SETTINGS_PERSISTENT" qemu-debug.log
+          rm -f qemu-debug.log
+          set +e
+          timeout 8s qemu-system-i386             -cdrom myos.iso             -drive file=qemu-disk.img,format=raw,if=ide             -m 128M             -display none             -monitor none             -serial none             -netdev user,id=n0             -device rtl8139,netdev=n0             -debugcon file:qemu-debug.log             -global isa-debugcon.iobase=0xe9
+          status=$?
+          set -e
+          test "$status" -eq 124
+          grep -q "MYOS_READY" qemu-debug.log
+          grep -q "MYOS_FS_PERSISTENT" qemu-debug.log
+          grep -q "MYOS_SETTINGS_PERSISTENT" qemu-debug.log
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
