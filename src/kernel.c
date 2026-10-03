@@ -1996,15 +1996,22 @@ static void cmd_net(void) {
 static void cmd_tcpconnect(const char* arg) {
     const char* p = arg;
     while (*p == ' ') ++p;
-    uint32_t ip = 0;
     int n = 0;
-    if (!net_parse_ipv4(p, &ip)) {
-        print("Usage: tcpconnect IPv4 PORT\n");
+    while (p[n] && p[n] != ':') ++n;
+    if (n <= 0 || !p[n] || !p[n + 1]) {
+        print("Usage: tcpconnect IPv4:PORT\n");
         return;
     }
-    while (p[n] && p[n] != ':') ++n;
-    if (!p[n] || p[n+1] == 0) {
-        print("Usage: tcpconnect IPv4 PORT\n");
+    char ip_text[16];
+    if (n >= (int)sizeof(ip_text)) {
+        print("Usage: tcpconnect IPv4:PORT\n");
+        return;
+    }
+    for (int i = 0; i < n; ++i) ip_text[i] = p[i];
+    ip_text[n] = 0;
+    uint32_t ip = 0;
+    if (!net_parse_ipv4(ip_text, &ip)) {
+        print("Invalid IPv4 address.\n");
         return;
     }
     uint32_t port = 0;
