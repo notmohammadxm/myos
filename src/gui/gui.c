@@ -100,6 +100,8 @@ static int filemgr_open;
 static int filemgr_selected;
 static gui_file_info_t file_data[16];
 static int file_count;
+static int network_open;
+static gui_net_info_t network_status;
 static int quick_settings_open;
 static int notification_open = 1;
 static int notifications_enabled = 1;
@@ -1337,6 +1339,89 @@ static void draw_quick_settings(void) {
     draw_text_centered(x + 16, y + 205, QUICK_W - 32, "OPEN SYSTEM MONITOR", bg);
 }
 
+static void draw_network_manager(void) {
+    if (!network_open) return;
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    int width = 520, height = 340;
+    if ((int)f->width < width + 24) width = (int)f->width - 24;
+    int x = ((int)f->width - width) / 2;
+    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
+    draw_round_card(x, y, width, height, 20, panel2, accent);
+    draw_text(x + 22, y + 18, "NETWORK MANAGER", accent);
+    draw_text(x + 22, y + 40,
+              network_status.available ? "RTL8139 / IPV4 ONLINE" : "NETWORK DRIVER UNAVAILABLE",
+              muted);
+
+    draw_round_card(x + 18, y + 64, width - 36, 48, 12, bg, border);
+    draw_round_rect(x + 32, y + 82, 8, 8, 4, network_status.link_up ? success : danger);
+    draw_text(x + 52, y + 76, "LINK", muted);
+    draw_text(x + 116, y + 76, network_status.link_up ? "UP" : "DOWN",
+              network_status.link_up ? success : danger);
+
+    draw_round_card(x + 18, y + 120, width - 36, 48, 12, bg, border);
+    draw_text(x + 32, y + 132, "IP", muted);
+    draw_text(x + 116, y + 132, "10.0.2.15", text);
+    draw_text(x + 302, y + 132, "GW", muted);
+    draw_text(x + 362, y + 132, "10.0.2.2", text);
+
+    draw_round_card(x + 18, y + 176, width - 36, 48, 12, bg, border);
+    draw_text(x + 32, y + 188, "TRAFFIC", muted);
+    draw_text(x + 116, y + 188, "TX", muted);
+    draw_uint_text(x + 144, y + 188, network_status.tx_packets, text);
+    draw_text(x + 238, y + 188, "RX", muted);
+    draw_uint_text(x + 266, y + 188, network_status.rx_packets, text);
+
+    draw_round_card(x + 18, y + 232, width - 36, 48, 12,
+                    network_status.ping_success ? panel : bg,
+                    network_status.ping_success ? success : border);
+    draw_text(x + 32, y + 244, "ICMP PING", muted);
+    draw_uint_text(x + 140, y + 244, network_status.ping_success, success);
+    draw_text(x + 174, y + 244, "OK", success);
+    draw_text(x + 258, y + 244, "FAIL", muted);
+    draw_uint_text(x + 312, y + 244, network_status.ping_fail, danger);
+
+    draw_round_card(x + 18, y + height - 52, width - 36, 30, 10, accent, accent);
+    draw_text_centered(x + 18, y + height - 45, width - 36, "PING GATEWAY   ESC CLOSE", bg);
+}
+
+void gui_network_set_status(const gui_net_info_t* status) {
+    if (!ready || !status) return;
+    network_status = *status;
+    if (network_open) gui_request_redraw();
+}
+
+void gui_network_open(void) {
+    if (!ready) return;
+    network_open = 1;
+    launcher_open = 0;
+    quick_settings_open = 0;
+    notification_open = 0;
+    power_open = 0;
+    taskmgr_open = 0;
+    filemgr_open = 0;
+    focused_window = -1;
+    gui_request_redraw();
+}
+
+static void gui_network_close(void) {
+    network_open = 0;
+    gui_request_redraw();
+}
+
+static int network_pointer_ping(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f || !network_open) return 0;
+    int width = 520, height = 340;
+    if ((int)f->width < width + 24) width = (int)f->width - 24;
+    int x = ((int)f->width - width) / 2;
+    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+    return mouse_x_pos >= x + 18 && mouse_x_pos < x + width - 18 &&
+           mouse_y_pos >= y + height - 52 && mouse_y_pos < y + height - 22;
+}
+
 static void draw_task_manager(void) {
     if (!taskmgr_open) return;
     const framebuffer_info_t* f = framebuffer_info();
@@ -2070,6 +2155,7 @@ void gui_redraw(void) {
         else draw_monitor(&windows[idx]);
     }
 
+    draw_network_manager();
     draw_task_manager();
     draw_file_manager();
     draw_notification();
