@@ -76,7 +76,7 @@ verify: build/myos.elf
 	grub-file --is-x86-multiboot2 $<
 
 run: myos.iso
-	qemu-system-i386 -cdrom myos.iso -m 512M
+	qemu-system-i386 -cdrom myos.iso -m 512M -netdev user,id=n0 -device rtl8139,netdev=n0
 
 clean:
 	rm -rf build myos.iso iso/boot/myos.elf

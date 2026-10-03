@@ -21,7 +21,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             nasm gcc-multilib binutils xorriso mtools \
-            grub-pc-bin grub-common
+            grub-pc-bin grub-common qemu-system-x86
 
       - name: Host unit tests
         run: make test
@@ -31,6 +31,16 @@ jobs:
 
       - name: Validate Multiboot2 kernel
         run: make verify
+
+      - name: QEMU boot smoke test
+        run: |
+          set +e
+          timeout 8s qemu-system-i386             -cdrom myos.iso             -m 128M             -display none             -monitor none             -serial none             -netdev user,id=n0             -device rtl8139,netdev=n0             -debugcon file:qemu-debug.log             -global isa-debugcon.iobase=0xe9
+          status=$?
+          set -e
+          test "$status" -eq 124
+          grep -q "MYOS_READY" qemu-debug.log
+          grep -q "MYOS_NET_READY" qemu-debug.log
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4

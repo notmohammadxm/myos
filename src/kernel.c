@@ -219,6 +219,15 @@ static inline uint32_t inl(uint16_t port) {
 }
 #endif
 
+static void debug_putc(char c) {
+    outb(0xE9, (uint8_t)c);
+}
+
+static void debug_write(const char* s) {
+    if (!s) return;
+    while (*s) debug_putc(*s++);
+}
+
 static inline void io_wait(void) {
     outb(0x80, 0);
 }
@@ -988,6 +997,27 @@ static int cpu_family(uint8_t* out_family) {
     return 1;
 }
 
+static void cmd_hardware(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    net_status_t net;
+    net_get_status(&net);
+    print("MyOS Hardware Diagnostics\n");
+    print("-------------------------\n");
+    print("Bootloader: "); print(bootloader_name); putc('\n');
+    print("Framebuffer: ");
+    if (f && framebuffer_available()) {
+        print_uint(f->width); putc('x'); print_uint(f->height); print(" 32bpp");
+    } else print("unavailable");
+    putc('\n');
+    print("Keyboard:    PS/2 ready\n");
+    print("Mouse:       "); print(mouse_available() ? "PS/2 ready" : "unavailable"); putc('\n');
+    print("ACPI:        "); print(acpi_find_fadt() ? "detected" : "not detected"); putc('\n');
+    print("Network:     "); print(net.available ? "RTL8139 ready" : "unavailable"); putc('\n');
+    print("Filesystem:  "); print(fs_available() ? "RAMFS ready" : "unavailable"); putc('\n');
+    print("Scheduler:   "); print_uint((uint32_t)process_count); print(" tasks / RR ");
+    print_uint(SCHED_QUANTUM); print(" tick quantum\n");
+}
+
 static void cmd_sysinfo(void) {
     char vendor[13] = {0};
     int have_cpuid = cpu_vendor(vendor, sizeof(vendor));
@@ -1557,7 +1587,7 @@ static int history_index(int logical_index) {
 static const char* command_names[] = {
     "help","version","clear","ascii","echo","calc","theme",
     "history","profile","whoami","hostname","sysinfo","mem",
-    "time","clock","date","calendar","taskmgr","settings","set",
+    "time","clock","date","calendar","taskmgr","hardware","settings","set",
     "notify","notifications","logs","net","ping","uptime",
     "ls","cat","touch","mkdir","rm","mv","write","fsinfo",
     "reboot","shutdown"
@@ -1802,6 +1832,8 @@ static void print_command_help(const char* name) {
         print("calendar - show the current month\n");
     } else if (streq(name, "taskmgr")) {
         print("taskmgr - show active MyOS kernel services\n");
+    } else if (streq(name, "hardware")) {
+        print("hardware - show hardware and kernel diagnostics\n");
     } else if (streq(name, "settings")) {
         print("settings - show current MyOS settings\n");
     } else if (streq(name, "set")) {
@@ -2205,6 +2237,7 @@ static void execute(const char* cmd) {
     else if (streq(cmd, "clock")) cmd_clock();
     else if (streq(cmd, "calendar")) cmd_calendar();
     else if (streq(cmd, "taskmgr")) cmd_taskmgr();
+    else if (streq(cmd, "hardware")) cmd_hardware();
     else if (starts_with(cmd, "taskmgr ")) {
         const char* arg;
         command_arg_after(cmd, 8, &arg);
@@ -2568,6 +2601,9 @@ void kernel_main(uint32_t magic, void* mb_info) {
     filesystem_gui_update();
     net_init();
     network_gui_update();
+    debug_write("MYOS_READY\n");
+    if (net_available()) debug_write("MYOS_NET_READY\n");
+    else debug_write("MYOS_NET_UNAVAILABLE\n");
     cpu_sti();
 
     prompt();
