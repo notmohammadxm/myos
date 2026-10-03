@@ -127,6 +127,7 @@ static void gui_request_redraw_rect(int x, int y, int w, int h);
 static void gui_request_terminal_redraw(void);
 static void launcher_reset_search(void);
 static void open_launcher_app(int index);
+static void launcher_record_recent(int index);
 static struct gui_window windows[WINDOW_COUNT];
 
 static int min_int(int a, int b) { return a < b ? a : b; }
@@ -890,9 +891,9 @@ static int launcher_match_at(int ordinal) {
         "FILE MANAGER AND STORAGE"
     };
     int match = 0;
-    for (int pos = 0; pos < 6; ++pos) {
+    for (int pos = 0; pos < 7; ++pos) {
         int index = recent_apps[pos];
-        if (index < 0 || index >= 6) continue;
+        if (index < 0 || index >= 7) continue;
         if (!launcher_contains(names[index], launcher_query) &&
             !launcher_contains(desc[index], launcher_query)) continue;
         if (match == ordinal) return index;
@@ -957,9 +958,9 @@ static void draw_launcher(void) {
     if (matches == 0) {
         draw_text_centered(x + 18, y + 130, width - 36, "NO APPLICATIONS FOUND", muted);
     } else {
-        const char* names[6] = {
+        const char* names[7] = {
             "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
-            "TASK MANAGER"
+            "TASK MANAGER", "FILES"
         };
         for (int ordinal = 0; ordinal < matches && ordinal < 5; ++ordinal) {
             int index = launcher_match_at(ordinal);
@@ -972,129 +973,13 @@ static void draw_launcher(void) {
             else if (index == 2) draw_icon_settings(x + 30, iy + 7, active ? accent : muted);
             else if (index == 3) draw_icon_calculator(x + 30, iy + 7, active ? accent : muted);
             else if (index == 4) draw_icon_monitor(x + 30, iy + 7, active ? accent : muted);
-            else draw_icon_system(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 5) draw_icon_system(x + 30, iy + 7, active ? accent : muted);
+            else draw_icon_terminal(x + 30, iy + 7, active ? accent : muted);
             draw_text_clipped(x + 64, iy + 5, names[index], active ? text : muted, width - 92);
         }
     }
 
     draw_text(x + 20, y + height - 22, "UP/DOWN SELECT   ENTER OPEN   ESC CLOSE", muted);
-}
-
-static void launcher_reset_search(void) {
-    launcher_query[0] = 0;
-    launcher_query_len = 0;
-    launcher_selected = 0;
-}
-
-static void launcher_toggle(void) {
-    launcher_open = !launcher_open;
-    if (launcher_open) launcher_reset_search();
-    quick_settings_open = 0;
-    power_open = 0;
-    gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
-}
-
-static void draw_launcher(void) {
-    if (!launcher_open) return;
-    int x = 18, y = TOPBAR_H + 8;
-    int width = LAUNCHER_W, height = LAUNCHER_H;
-    int matches = launcher_match_count();
-    if (launcher_selected >= matches) launcher_selected = max_int(0, matches - 1);
-
-    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
-    draw_round_card(x, y, width, height, 20, panel2, accent);
-
-    draw_text(x + 24, y + 18, "MYOS", accent);
-    draw_text(x + 24, y + 38, launcher_query_len ? "SEARCH RESULTS" : "RECENT APPLICATIONS", muted);
-
-    draw_round_card(x + 18, y + 64, width - 36, 38, 11, bg, border);
-    draw_round_rect(x + 31, y + 76, 12, 12, 4, accent);
-    draw_text(x + 53, y + 73, launcher_query_len ? launcher_query : "SEARCH APPLICATIONS",
-              launcher_query_len ? text : muted);
-    if (launcher_query_len) draw_text(x + 53 + launcher_query_len * FONT_W, y + 73, "_", accent);
-
-    if (matches == 0) {
-        draw_text_centered(x + 18, y + 130, width - 36, "NO APPLICATIONS FOUND", muted);
-    } else {
-        for (int ordinal = 0; ordinal < matches && ordinal < 5; ++ordinal) {
-            int index = launcher_match_at(ordinal);
-            int iy = y + 112 + ordinal * 40;
-            int active = ordinal == launcher_selected;
-            draw_round_card(x + 18, iy, width - 36, 34, 10,
-                            active ? panel : bg, active ? accent : border);
-            if (index == 0) draw_icon_terminal(x + 30, iy + 7, active ? accent : muted);
-            else if (index == 1) draw_icon_system(x + 30, iy + 7, active ? accent : muted);
-            else if (index == 2) draw_icon_settings(x + 30, iy + 7, active ? accent : muted);
-            else if (index == 3) draw_icon_calculator(x + 30, iy + 7, active ? accent : muted);
-            else draw_icon_monitor(x + 30, iy + 7, active ? accent : muted);
-            const char* names[5] = {
-                "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR"
-            };
-            draw_text(x + 64, iy + 5, names[index], active ? text : muted);
-        }
-    }
-
-    draw_text(x + 20, y + height - 22, "UP/DOWN SELECT   ENTER OPEN   ESC CLOSE", muted);
-}
-
-static void draw_terminal_surface(const struct gui_window* w) {
-    if (!w->visible || w->minimized) return;
-    int inner_x = w->x + TERM_PAD;
-    int inner_y = w->y + TITLE_H + 10;
-    int inner_w = w->w - TERM_PAD * 2;
-    int inner_h = w->h - TITLE_H - 20;
-    term_view_rows = max_int(1, inner_h / FONT_H);
-    int cols = max_int(1, inner_w / FONT_W);
-    if (cols > TERM_COLS) cols = TERM_COLS;
-    if (term_view_top < 0) term_view_top = 0;
-    if (term_view_top > TERM_ROWS - term_view_rows) term_view_top = max_int(0, TERM_ROWS - term_view_rows);
-
-    renderer_rect(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, terminal_bg);
-    for (int r = 0; r < term_view_rows; ++r) {
-        int source_row = term_view_top + r;
-        if (source_row < 0 || source_row >= TERM_ROWS) continue;
-        for (int c = 0; c < cols; ++c) {
-            char ch = term[source_row][c];
-            int selected = 0;
-            if (source_row == input_y && selection_anchor >= 0 && selection_anchor != selection_cursor) {
-                int a = selection_anchor, b = selection_cursor;
-                if (a > b) { int t = a; a = b; b = t; }
-                selected = c >= input_x + a && c < input_x + b;
-            }
-            if (selected) renderer_rect(inner_x + c * FONT_W, inner_y + r * FONT_H, FONT_W, FONT_H, accent);
-            if (ch == ' ') continue;
-            draw_char(inner_x + c * FONT_W, inner_y + r * FONT_H, ch, selected ? terminal_bg : attr_color(term_attr[source_row][c]));
-        }
-    }
-
-    if (focused_window == 0 && input_active) {
-        int view_y = ty - term_view_top;
-        int cx = inner_x + tx * FONT_W;
-        int cy = inner_y + view_y * FONT_H;
-        if (view_y >= 0 && view_y < term_view_rows)
-            renderer_rect(cx, cy + FONT_H - 2, FONT_W - 1, 2, accent);
-    }
-}
-
-static void terminal_follow_bottom(void) {
-    if (term_view_rows <= 0) return;
-    if (ty >= term_view_rows) term_view_top = ty - term_view_rows + 1;
-    else term_view_top = 0;
-}
-
-static void terminal_scroll_buffer(void) {
-    for (int r = 1; r < TERM_ROWS; ++r)
-        for (int c = 0; c < TERM_COLS; ++c) {
-            term[r - 1][c] = term[r][c];
-            term_attr[r - 1][c] = term_attr[r][c];
-        }
-    for (int c = 0; c < TERM_COLS; ++c) {
-        term[TERM_ROWS - 1][c] = ' ';
-        term_attr[TERM_ROWS - 1][c] = 0x0A;
-    }
-    ty = TERM_ROWS - 1;
-    input_y = max_int(0, input_y - 1);
-    term_view_top = max_int(0, term_view_top - 1);
 }
 
 static int calc_is_space(char c) { return c == ' ' || c == '\t'; }
