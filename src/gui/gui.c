@@ -96,6 +96,12 @@ static int notifications_enabled = 1;
 static int notifications_cleared;
 static int animations_enabled = 1;
 static int power_open;
+static int taskmgr_open;
+static int taskmgr_selected;
+static int taskmgr_sort_mode;
+static gui_task_info_t task_data[8];
+static int task_count;
+static int task_order[8];
 static char calc_display[32] = "0";
 static int calc_has_value;
 static int calc_replace_next;
@@ -127,6 +133,16 @@ static void action_push(int type, const char* value) {
     if (next == action_tail) return;
     action_queue[action_head].type = type;
     action_queue[action_head].value = value;
+    action_queue[action_head].arg = 0;
+    action_head = next;
+}
+
+static void action_push_arg(int type, int arg) {
+    int next = (action_head + 1) % 4;
+    if (next == action_tail) return;
+    action_queue[action_head].type = type;
+    action_queue[action_head].value = 0;
+    action_queue[action_head].arg = arg;
     action_head = next;
 }
 
@@ -824,31 +840,37 @@ static int launcher_contains(const char* text_in, const char* query) {
 }
 
 static int launcher_match_count(void) {
-    const char* names[5] = {
-        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR"
+    const char* names[6] = {
+        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
+        "TASK MANAGER"
     };
-    const char* desc[5] = {
+    const char* desc[6] = {
         "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
-        "FAST INTEGER MATH", "LIVE RUNTIME STATUS"
+        "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL"
     };
     int count = 0;
-    for (int i = 0; i < 5; ++i)
-        if (launcher_contains(names[i], launcher_query) ||
-            launcher_contains(desc[i], launcher_query)) ++count;
+    for (int pos = 0; pos < 6; ++pos) {
+        int index = recent_apps[pos < 6 ? pos : 0];
+        if (index < 0 || index >= 6) continue;
+        if (launcher_contains(names[index], launcher_query) ||
+            launcher_contains(desc[index], launcher_query)) ++count;
+    }
     return count;
 }
 
 static int launcher_match_at(int ordinal) {
-    const char* names[5] = {
-        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR"
+    const char* names[6] = {
+        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
+        "TASK MANAGER"
     };
-    const char* desc[5] = {
+    const char* desc[6] = {
         "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
-        "FAST INTEGER MATH", "LIVE RUNTIME STATUS"
+        "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL"
     };
     int match = 0;
-    for (int pos = 0; pos < 5; ++pos) {
+    for (int pos = 0; pos < 6; ++pos) {
         int index = recent_apps[pos];
+        if (index < 0 || index >= 6) continue;
         if (!launcher_contains(names[index], launcher_query) &&
             !launcher_contains(desc[index], launcher_query)) continue;
         if (match == ordinal) return index;
@@ -856,6 +878,78 @@ static int launcher_match_at(int ordinal) {
     }
     return -1;
 }
+
+static void open_launcher_app(int index) {
+    if (index == 5) {
+        gui_taskmgr_open();
+        launcher_open = 0;
+        launcher_reset_search();
+        gui_request_redraw();
+        return;
+    }
+    if (index >= 0 && index < WINDOW_COUNT) open_window(index);
+}
+
+static void launcher_reset_search(void) {
+    launcher_query[0] = 0;
+    launcher_query_len = 0;
+    launcher_selected = 0;
+}
+
+static void launcher_toggle(void) {
+    launcher_open = !launcher_open;
+    if (launcher_open) launcher_reset_search();
+    quick_settings_open = 0;
+    power_open = 0;
+    taskmgr_open = 0;
+    gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
+}
+
+static void draw_launcher(void) {
+    if (!launcher_open) return;
+    int x = 18, y = TOPBAR_H + 8;
+    int width = LAUNCHER_W, height = LAUNCHER_H;
+    int matches = launcher_match_count();
+    if (launcher_selected >= matches) launcher_selected = max_int(0, matches - 1);
+
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
+    draw_round_card(x, y, width, height, 20, panel2, accent);
+
+    draw_text(x + 24, y + 18, "MYOS", accent);
+    draw_text(x + 24, y + 38, launcher_query_len ? "SEARCH RESULTS" : "RECENT APPLICATIONS", muted);
+
+    draw_round_card(x + 18, y + 64, width - 36, 38, 11, bg, border);
+    draw_round_rect(x + 31, y + 76, 12, 12, 4, accent);
+    draw_text(x + 53, y + 73, launcher_query_len ? launcher_query : "SEARCH APPLICATIONS",
+              launcher_query_len ? text : muted);
+    if (launcher_query_len) draw_text(x + 53 + launcher_query_len * FONT_W, y + 73, "_", accent);
+
+    if (matches == 0) {
+        draw_text_centered(x + 18, y + 130, width - 36, "NO APPLICATIONS FOUND", muted);
+    } else {
+        const char* names[6] = {
+            "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
+            "TASK MANAGER"
+        };
+        for (int ordinal = 0; ordinal < matches && ordinal < 5; ++ordinal) {
+            int index = launcher_match_at(ordinal);
+            int iy = y + 112 + ordinal * 40;
+            int active = ordinal == launcher_selected;
+            draw_round_card(x + 18, iy, width - 36, 34, 10,
+                            active ? panel : bg, active ? accent : border);
+            if (index == 0) draw_icon_terminal(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 1) draw_icon_system(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 2) draw_icon_settings(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 3) draw_icon_calculator(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 4) draw_icon_monitor(x + 30, iy + 7, active ? accent : muted);
+            else draw_icon_system(x + 30, iy + 7, active ? accent : muted);
+            draw_text_clipped(x + 64, iy + 5, names[index], active ? text : muted, width - 92);
+        }
+    }
+
+    draw_text(x + 20, y + height - 22, "UP/DOWN SELECT   ENTER OPEN   ESC CLOSE", muted);
+}
+
 static void launcher_reset_search(void) {
     launcher_query[0] = 0;
     launcher_query_len = 0;
@@ -1261,6 +1355,49 @@ static void draw_quick_settings(void) {
 
     draw_round_card(x + 16, y + 194, QUICK_W - 32, 38, 11, accent, accent);
     draw_text_centered(x + 16, y + 205, QUICK_W - 32, "OPEN SYSTEM MONITOR", bg);
+}
+
+static void draw_task_manager(void) {
+    if (!taskmgr_open) return;
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    int width = 720, height = 430;
+    if ((int)f->width < width + 24) width = (int)f->width - 24;
+    if ((int)f->height < height + TOPBAR_H + FOOTER_H) height = (int)f->height - TOPBAR_H - FOOTER_H - 24;
+    int x = ((int)f->width - width) / 2;
+    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
+    draw_round_card(x, y, width, height, 20, panel2, accent);
+    draw_text(x + 22, y + 18, "TASK MANAGER", accent);
+    draw_text(x + 22, y + 40, "ROUND ROBIN KERNEL TASKS", muted);
+
+    const char* headers[6] = { "PID", "NAME", "STATE", "CPU", "MEM", "PRIO" };
+    int cols[6] = { 24, 72, 286, 490, 566, 640 };
+    for (int i = 0; i < 6; ++i) draw_text(x + cols[i], y + 72, headers[i], muted);
+    draw_soft_divider(x + 20, y + 94, width - 40, border);
+
+    for (int row = 0; row < task_count && row < 8; ++row) {
+        int oi = task_order[row];
+        if (oi < 0 || oi >= task_count) continue;
+        int yy = y + 102 + row * 34;
+        int active = row == taskmgr_selected;
+        draw_round_card(x + 18, yy - 2, width - 36, 30, 9, active ? panel : bg, active ? accent : border);
+        draw_text(x + cols[0], yy + 5, "00", active ? text : muted);
+        int pid = task_data[oi].pid;
+        draw_text(x + cols[0], yy + 5, pid < 10 ? (pid == 0 ? "00" : pid == 1 ? "01" : "02") : "??",
+                  active ? text : muted);
+        draw_text_clipped(x + cols[1], yy + 5, task_data[oi].name, active ? text : muted, 200);
+        draw_text(x + cols[2], yy + 5, task_data[oi].state, active ? text : muted);
+        draw_text(x + cols[3], yy + 5, task_data[oi].cpu_percent > 99 ? "99%" :
+                  task_data[oi].cpu_percent > 9 ? (task_data[oi].cpu_percent == 10 ? "10%" : "??") : "0%", success);
+        draw_text(x + cols[4], yy + 5, task_data[oi].memory_kib > 99 ? "999K" :
+                  task_data[oi].memory_kib > 9 ? "64K" : "8K", text);
+        draw_text(x + cols[5], yy + 5, task_data[oi].priority > 9 ? "9" :
+                  task_data[oi].priority == 0 ? "0" : "1", warning);
+    }
+
+    draw_text(x + 20, y + height - 48, "UP/DOWN SELECT   C CPU   M MEMORY   N NAME   X TERMINATE   R RESTART   ESC CLOSE", muted);
 }
 
 static void draw_power_menu(void) {
