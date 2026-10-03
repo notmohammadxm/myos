@@ -89,13 +89,19 @@ static int launcher_open;
 static int launcher_selected;
 static int launcher_query_len;
 static char launcher_query[32];
-static int recent_apps[5] = { 0, 1, 2, 3, 4 };
+static int recent_apps[6] = { 0, 1, 2, 3, 4, 5 };
 static int quick_settings_open;
 static int notification_open = 1;
 static int notifications_enabled = 1;
 static int notifications_cleared;
 static int animations_enabled = 1;
 static int power_open;
+static int taskmgr_open;
+static int taskmgr_selected;
+static int taskmgr_sort_mode;
+static gui_task_info_t task_data[8];
+static int task_count;
+static int task_order[8];
 static char calc_display[32] = "0";
 static int calc_has_value;
 static int calc_replace_next;
@@ -115,6 +121,8 @@ static int window_order[WINDOW_COUNT] = { 1, 2, 3, 4, 0 };
 static void gui_request_redraw(void);
 static void gui_request_redraw_rect(int x, int y, int w, int h);
 static void gui_request_terminal_redraw(void);
+static void launcher_reset_search(void);
+static void open_launcher_app(int index);
 static struct gui_window windows[WINDOW_COUNT];
 
 static int min_int(int a, int b) { return a < b ? a : b; }
@@ -127,6 +135,16 @@ static void action_push(int type, const char* value) {
     if (next == action_tail) return;
     action_queue[action_head].type = type;
     action_queue[action_head].value = value;
+    action_queue[action_head].arg = 0;
+    action_head = next;
+}
+
+static void action_push_arg(int type, int arg) {
+    int next = (action_head + 1) % 4;
+    if (next == action_tail) return;
+    action_queue[action_head].type = type;
+    action_queue[action_head].value = 0;
+    action_queue[action_head].arg = arg;
     action_head = next;
 }
 
@@ -498,6 +516,17 @@ static void draw_text_centered(int x, int y, int width, const char* s, uint32_t 
     draw_text(x + max_int(0, (width - tw) / 2), y, s, color);
 }
 
+static void draw_uint_text(int x, int y, uint32_t value, uint32_t color) {
+    char digits[10];
+    int n = 0;
+    if (value == 0) digits[n++] = '0';
+    while (value && n < (int)sizeof(digits)) {
+        digits[n++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    for (int i = 0; i < n; ++i) draw_char(x + i * FONT_W, y, digits[n - i - 1], color);
+}
+
 static void draw_soft_divider(int x, int y, int width, uint32_t color) {
     if (width <= 0) return;
     renderer_rect(x, y, width, 1, color);
@@ -824,31 +853,40 @@ static int launcher_contains(const char* text_in, const char* query) {
 }
 
 static int launcher_match_count(void) {
-    const char* names[5] = {
-        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR"
+    const char* names[6] = {
+        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
+        "TASK MANAGER"
     };
-    const char* desc[5] = {
+    const char* desc[6] = {
         "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
-        "FAST INTEGER MATH", "LIVE RUNTIME STATUS"
+        "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL"
     };
     int count = 0;
-    for (int i = 0; i < 5; ++i)
-        if (launcher_contains(names[i], launcher_query) ||
-            launcher_contains(desc[i], launcher_query)) ++count;
+    for (int pos = 0; pos < 6; ++pos) {
+        int index = recent_apps[pos];
+        if (index < 0 || index >= 6) continue;
+        if (launcher_contains(names[index], launcher_query) ||
+            launcher_contains(desc[index], launcher_query)) {
+            ++count;
+            if (count >= 5) break;
+        }
+    }
     return count;
 }
 
 static int launcher_match_at(int ordinal) {
-    const char* names[5] = {
-        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR"
+    const char* names[6] = {
+        "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
+        "TASK MANAGER"
     };
-    const char* desc[5] = {
+    const char* desc[6] = {
         "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
-        "FAST INTEGER MATH", "LIVE RUNTIME STATUS"
+        "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL"
     };
     int match = 0;
-    for (int pos = 0; pos < 5; ++pos) {
+    for (int pos = 0; pos < 6; ++pos) {
         int index = recent_apps[pos];
+        if (index < 0 || index >= 6) continue;
         if (!launcher_contains(names[index], launcher_query) &&
             !launcher_contains(desc[index], launcher_query)) continue;
         if (match == ordinal) return index;
@@ -856,6 +894,78 @@ static int launcher_match_at(int ordinal) {
     }
     return -1;
 }
+
+static void open_launcher_app(int index) {
+    if (index == 5) {
+        gui_taskmgr_open();
+        launcher_open = 0;
+        launcher_reset_search();
+        gui_request_redraw();
+        return;
+    }
+    if (index >= 0 && index < WINDOW_COUNT) open_window(index);
+}
+
+static void launcher_reset_search(void) {
+    launcher_query[0] = 0;
+    launcher_query_len = 0;
+    launcher_selected = 0;
+}
+
+static void launcher_toggle(void) {
+    launcher_open = !launcher_open;
+    if (launcher_open) launcher_reset_search();
+    quick_settings_open = 0;
+    power_open = 0;
+    taskmgr_open = 0;
+    gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
+}
+
+static void draw_launcher(void) {
+    if (!launcher_open) return;
+    int x = 18, y = TOPBAR_H + 8;
+    int width = LAUNCHER_W, height = LAUNCHER_H;
+    int matches = launcher_match_count();
+    if (launcher_selected >= matches) launcher_selected = max_int(0, matches - 1);
+
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
+    draw_round_card(x, y, width, height, 20, panel2, accent);
+
+    draw_text(x + 24, y + 18, "MYOS", accent);
+    draw_text(x + 24, y + 38, launcher_query_len ? "SEARCH RESULTS" : "RECENT APPLICATIONS", muted);
+
+    draw_round_card(x + 18, y + 64, width - 36, 38, 11, bg, border);
+    draw_round_rect(x + 31, y + 76, 12, 12, 4, accent);
+    draw_text(x + 53, y + 73, launcher_query_len ? launcher_query : "SEARCH APPLICATIONS",
+              launcher_query_len ? text : muted);
+    if (launcher_query_len) draw_text(x + 53 + launcher_query_len * FONT_W, y + 73, "_", accent);
+
+    if (matches == 0) {
+        draw_text_centered(x + 18, y + 130, width - 36, "NO APPLICATIONS FOUND", muted);
+    } else {
+        const char* names[6] = {
+            "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
+            "TASK MANAGER"
+        };
+        for (int ordinal = 0; ordinal < matches && ordinal < 5; ++ordinal) {
+            int index = launcher_match_at(ordinal);
+            int iy = y + 112 + ordinal * 40;
+            int active = ordinal == launcher_selected;
+            draw_round_card(x + 18, iy, width - 36, 34, 10,
+                            active ? panel : bg, active ? accent : border);
+            if (index == 0) draw_icon_terminal(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 1) draw_icon_system(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 2) draw_icon_settings(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 3) draw_icon_calculator(x + 30, iy + 7, active ? accent : muted);
+            else if (index == 4) draw_icon_monitor(x + 30, iy + 7, active ? accent : muted);
+            else draw_icon_system(x + 30, iy + 7, active ? accent : muted);
+            draw_text_clipped(x + 64, iy + 5, names[index], active ? text : muted, width - 92);
+        }
+    }
+
+    draw_text(x + 20, y + height - 22, "UP/DOWN SELECT   ENTER OPEN   ESC CLOSE", muted);
+}
+
 static void launcher_reset_search(void) {
     launcher_query[0] = 0;
     launcher_query_len = 0;
@@ -1263,6 +1373,102 @@ static void draw_quick_settings(void) {
     draw_text_centered(x + 16, y + 205, QUICK_W - 32, "OPEN SYSTEM MONITOR", bg);
 }
 
+static void draw_task_manager(void) {
+    if (!taskmgr_open) return;
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    int width = 720, height = 430;
+    if ((int)f->width < width + 24) width = (int)f->width - 24;
+    if ((int)f->height < height + TOPBAR_H + FOOTER_H) height = (int)f->height - FOOTER_H - TOPBAR_H - 24;
+    if (height < 320) height = 320;
+    int x = ((int)f->width - width) / 2;
+    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
+    draw_round_card(x, y, width, height, 20, panel2, accent);
+    draw_text(x + 22, y + 18, "TASK MANAGER", accent);
+    draw_text(x + 22, y + 40, "ROUND ROBIN KERNEL TASKS", muted);
+
+    const char* headers[6] = { "PID", "NAME", "STATE", "CPU", "MEM", "PRIO" };
+    int cols[6] = { 24, 72, 286, 490, 566, 640 };
+    for (int i = 0; i < 6; ++i) draw_text(x + cols[i], y + 72, headers[i], muted);
+    draw_soft_divider(x + 20, y + 94, width - 40, border);
+    int rows = (height - 170) / 34;
+    if (rows > 8) rows = 8;
+    for (int row = 0; row < rows && row < task_count; ++row) {
+        int oi = task_order[row];
+        if (oi < 0 || oi >= task_count) continue;
+        int yy = y + 102 + row * 34;
+        int active = row == taskmgr_selected;
+        draw_round_card(x + 18, yy - 2, width - 36, 30, 9, active ? panel : bg, active ? accent : border);
+        draw_uint_text(x + cols[0], yy + 5, (uint32_t)task_data[oi].pid, active ? text : muted);
+        draw_text_clipped(x + cols[1], yy + 5, task_data[oi].name, active ? text : muted, 196);
+        draw_text_clipped(x + cols[2], yy + 5, task_data[oi].state, active ? text : muted, 174);
+        draw_uint_text(x + cols[3], yy + 5, (uint32_t)task_data[oi].cpu_percent, success);
+        draw_text(x + cols[3] + 24, yy + 5, "%", success);
+        draw_uint_text(x + cols[4], yy + 5, (uint32_t)task_data[oi].memory_kib, text);
+        draw_text(x + cols[4] + 32, yy + 5, "K", text);
+        draw_uint_text(x + cols[5], yy + 5, (uint32_t)task_data[oi].priority, warning);
+    }
+    draw_round_card(x + 18, y + height - 78, 106, 30, 10, bg, border);
+    draw_round_card(x + 132, y + height - 78, 106, 30, 10, bg, border);
+    draw_text_centered(x + 18, y + height - 71, 106, "TERMINATE", danger);
+    draw_text_centered(x + 132, y + height - 71, 106, "RESTART", success);
+    draw_text(x + 258, y + height - 71, "C CPU  M MEMORY  N PID  ESC CLOSE", muted);
+}
+
+static void taskmgr_sort_data(void) {
+    for(int i=0;i<task_count;++i) task_order[i]=i;
+    for(int i=0;i<task_count;++i) for(int j=i+1;j<task_count;++j) {
+        int a=task_order[i], b=task_order[j], swap=0;
+        if(taskmgr_sort_mode==1) swap=task_data[b].cpu_percent>task_data[a].cpu_percent;
+        else if(taskmgr_sort_mode==2) swap=task_data[b].memory_kib>task_data[a].memory_kib;
+        else if(taskmgr_sort_mode==3) swap=task_data[b].priority>task_data[a].priority;
+        else swap=task_data[b].pid<task_data[a].pid;
+        if(swap){int t=task_order[i];task_order[i]=task_order[j];task_order[j]=t;}
+    }
+    if(taskmgr_selected>=task_count) taskmgr_selected=max_int(0,task_count-1);
+}
+
+void gui_taskmgr_set_data(const gui_task_info_t* tasks,int count){
+    if(!ready || !tasks) return;
+    task_count=max_int(0,min_int(count,8));
+    for(int i=0;i<task_count;++i) task_data[i]=tasks[i];
+    taskmgr_sort_data();
+    if (taskmgr_open) gui_request_redraw();
+}
+
+void gui_taskmgr_open(void){
+    if(!ready)return;
+    taskmgr_open=1; taskmgr_selected=0; taskmgr_sort_mode=0;
+    launcher_open=0; quick_settings_open=0; notification_open=0; power_open=0; focused_window=-1;
+    taskmgr_sort_data(); gui_request_redraw();
+}
+
+static void gui_taskmgr_close(void){taskmgr_open=0; notification_open=0; gui_request_redraw();}
+
+static int taskmgr_pointer_row(void){
+    const framebuffer_info_t* f=framebuffer_info(); if(!f||!taskmgr_open)return -1;
+    int w=720,h=430; if((int)f->width<w+24)w=(int)f->width-24; if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    if(h<320)h=320;
+    int x=((int)f->width-w)/2, y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
+    if(mouse_x_pos<x+18||mouse_x_pos>=x+w-18||mouse_y_pos<y+100)return -1;
+    int row=(mouse_y_pos-y-100)/34;
+    if(row<0||row>=task_count||row>=8||(mouse_y_pos-y-100)%34>=30)return -1;
+    return row;
+}
+
+static int taskmgr_pointer_button(void){
+    const framebuffer_info_t* f=framebuffer_info(); if(!f||!taskmgr_open)return 0;
+    int w=720,h=430; if((int)f->width<w+24)w=(int)f->width-24; if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    if(h<320)return 0;
+    int x=((int)f->width-w)/2, y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
+    if(mouse_y_pos<y+h-78||mouse_y_pos>=y+h-48)return 0;
+    if(mouse_x_pos>=x+18&&mouse_x_pos<x+124)return 1;
+    if(mouse_x_pos>=x+132&&mouse_x_pos<x+238)return 2;
+    return 0;
+}
+
 static void draw_power_menu(void) {
     if (!power_open) return;
     const framebuffer_info_t* f = framebuffer_info();
@@ -1483,6 +1689,42 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     (void)shift;
     if (!ready) return 0;
 
+    if (taskmgr_open) {
+        if (event == GUI_KEY_ESCAPE) {
+            gui_taskmgr_close();
+            return 1;
+        }
+        if (event == GUI_KEY_UP) {
+            if (task_count > 0) taskmgr_selected = (taskmgr_selected + task_count - 1) % task_count;
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == GUI_KEY_DOWN) {
+            if (task_count > 0) taskmgr_selected = (taskmgr_selected + 1) % task_count;
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == 'c') taskmgr_sort_mode = 1;
+        else if (event == 'm') taskmgr_sort_mode = 2;
+        else if (event == 'n') taskmgr_sort_mode = 0;
+        else if (event == 'x') {
+            if (taskmgr_selected < task_count) {
+                int idx = task_order[taskmgr_selected];
+                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_TERMINATE, task_data[idx].pid);
+            }
+        } else if (event == 'r') {
+            if (taskmgr_selected < task_count) {
+                int idx = task_order[taskmgr_selected];
+                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_RESTART, task_data[idx].pid);
+            }
+        } else {
+            return 1;
+        }
+        taskmgr_sort_data();
+        gui_request_redraw();
+        return 1;
+    }
+
     if (launcher_open) {
         int matches = launcher_match_count();
         if (event == GUI_KEY_ESCAPE) {
@@ -1504,9 +1746,7 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
         if (event == '\n' || event == '\r') {
             if (matches > 0) {
                 int index = launcher_match_at(launcher_selected);
-                launcher_open = 0;
-                launcher_reset_search();
-                open_window(index);
+                open_launcher_app(index);
             }
             return 1;
         }
@@ -1534,8 +1774,7 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     if (quick_settings_open) {
         if (event == GUI_KEY_ESCAPE) {
             quick_settings_open = 0;
-            gui_request_redraw_rect(0, TOPBAR_H, (int)framebuffer_info()->width,
-                                    QUICK_H + 18);
+            gui_request_redraw_rect(0, TOPBAR_H, (int)framebuffer_info()->width, QUICK_H + 18);
             return 1;
         }
         if (event == '1' || event == '2' || event == '3') {
@@ -1619,7 +1858,7 @@ void gui_init(void) {
     launcher_selected = 0;
     launcher_query_len = 0;
     launcher_query[0] = 0;
-    for (int i = 0; i < 5; ++i) recent_apps[i] = i;
+    for (int i = 0; i < 6; ++i) recent_apps[i] = i;
     quick_settings_open = 0;
     notification_open = 1;
     notifications_cleared = 0;
@@ -1814,6 +2053,7 @@ void gui_redraw(void) {
         else draw_monitor(&windows[idx]);
     }
 
+    draw_task_manager();
     draw_notification();
     draw_power_menu();
     draw_quick_settings();
@@ -2044,7 +2284,22 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     uint8_t released = (uint8_t)((new_buttons ^ mouse_prev_buttons) & mouse_prev_buttons);
 
     if (pressed & 1u) {
-        if (launcher_open) {
+        if (taskmgr_open) {
+            int row = taskmgr_pointer_row();
+            int button = taskmgr_pointer_button();
+            if (row >= 0) {
+                taskmgr_selected = row;
+                gui_request_redraw();
+            } else if (button == 1 && taskmgr_selected < task_count) {
+                int idx = task_order[taskmgr_selected];
+                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_TERMINATE, task_data[idx].pid);
+                gui_request_redraw();
+            } else if (button == 2 && taskmgr_selected < task_count) {
+                int idx = task_order[taskmgr_selected];
+                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_RESTART, task_data[idx].pid);
+                gui_request_redraw();
+            }
+        } else if (launcher_open) {
             int launcher_item = -1;
             if (point_in_launcher_item(&launcher_item)) {
                 open_window(launcher_item);
