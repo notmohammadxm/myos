@@ -37,6 +37,7 @@
 #define ARP_REPLY 2u
 #define IP_PROTO_ICMP 1u
 #define IP_PROTO_UDP 17u
+#define IP_PROTO_TCP 6u
 
 #ifdef UNIT_TEST
 static uint32_t io_ports[65536];
@@ -100,6 +101,7 @@ static uint32_t rx_packets;
 static uint32_t ping_success;
 static uint32_t ping_fail;
 static uint16_t ip_id = 1;
+static uint16_t tcp_ephemeral_port = 49152;
 
 static uint32_t pci_read32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset) {
     uint32_t address = 0x80000000u |
@@ -355,6 +357,97 @@ int net_ping_ipv4(uint32_t destination) {
         return 1;
     }
     ++ping_fail;
+    return 0;
+}
+
+static uint16_t tcp_checksum(uint32_t source, uint32_t destination,
+                                      const uint8_t* tcp, uint16_t length) {
+    uint32_t sum = 0;
+    sum += (source >> 16) & 0xFFFFu;
+    sum += source & 0xFFFFu;
+    sum += (destination >> 16) & 0xFFFFu;
+    sum += destination & 0xFFFFu;
+    sum += IP_PROTO_TCP;
+    sum += length;
+    for (uint16_t i = 0; i + 1u < length; i += 2u)
+        sum += ((uint32_t)tcp[i] << 8) | tcp[i + 1u];
+    if (length & 1u) sum += (uint32_t)tcp[length - 1u] << 8;
+    while (sum >> 16) sum = (sum & 0xFFFFu) + (sum >> 16);
+    return (uint16_t)~sum;
+}
+
+static int tcp_build(uint8_t* frame, const uint8_t dest_mac[6],
+                     uint32_t destination, uint16_t source_port,
+                     uint16_t destination_port, uint32_t sequence,
+                     uint32_t acknowledgement, uint8_t flags) {
+    build_ethernet(frame, dest_mac, ETH_IPV4);
+    uint8_t* ip = frame + 14;
+    uint8_t* tcp = frame + 34;
+    for (int i = 0; i < 20; ++i) tcp[i] = 0;
+    put16be(tcp + 0, source_port);
+    put16be(tcp + 2, destination_port);
+    put32be(tcp + 4, sequence);
+    put32be(tcp + 8, acknowledgement);
+    tcp[12] = 0x50;
+    tcp[13] = flags;
+    put16be(tcp + 14, 32768u);
+    put16be(tcp + 16, 0);
+    put16be(tcp + 18, 0);
+
+    uint16_t ip_len = 40;
+    ip[0] = 0x45;
+    ip[1] = 0;
+    put16be(ip + 2, ip_len);
+    put16be(ip + 4, ip_id++);
+    put16be(ip + 6, 0x4000u);
+    ip[8] = 64;
+    ip[9] = IP_PROTO_TCP;
+    put16be(ip + 10, 0);
+    put32be(ip + 12, local_ip);
+    put32be(ip + 16, destination);
+    put16be(ip + 10, checksum16(ip, 20));
+    put16be(tcp + 16, tcp_checksum(local_ip, destination, tcp, 20));
+    return 14 + ip_len;
+}
+
+int net_tcp_connect(uint32_t destination, uint16_t destination_port) {
+    if (!ready || destination_port == 0) return 0;
+    uint32_t next_hop = ip_same_subnet(destination, local_ip) ? destination : local_gateway;
+    uint8_t dest_mac[6];
+    if (!resolve_arp(next_hop, dest_mac)) return 0;
+
+    uint16_t source_port = tcp_ephemeral_port++;
+    if (tcp_ephemeral_port < 49152u) tcp_ephemeral_port = 49152u;
+    uint32_t sequence = ((uint32_t)ip_id << 16) | source_port;
+    uint8_t frame[64];
+    int length = tcp_build(frame, dest_mac, destination, source_port, destination_port,
+                           sequence, 0, 0x02);
+    if (!rtl_send(frame, (uint16_t)length)) return 0;
+
+    for (uint32_t loops = 0; loops < PING_TIMEOUT; ++loops) {
+        uint8_t rx[1600];
+        int n = rtl_receive(rx, sizeof(rx));
+        if (n < 54 || get16be(rx + 12) != ETH_IPV4) continue;
+        if ((rx[14] >> 4) != 4) continue;
+        uint8_t ihl = (uint8_t)((rx[14] & 0x0Fu) * 4u);
+        if (ihl < 20 || n < 14 + ihl + 20) continue;
+        if (rx[14 + 9] != IP_PROTO_TCP) continue;
+        if (get32be(rx + 14 + 12) != destination) continue;
+        uint8_t* tcp_rx = rx + 14 + ihl;
+        if (get16be(tcp_rx + 0) != destination_port ||
+            get16be(tcp_rx + 2) != source_port) continue;
+        uint8_t data_offset = (uint8_t)((tcp_rx[12] >> 4) * 4u);
+        if (data_offset < 20 || n < 14 + ihl + data_offset) continue;
+        if ((tcp_rx[13] & 0x12u) != 0x12u) continue;
+        uint32_t peer_sequence = get32be(tcp_rx + 4);
+        uint32_t peer_ack = get32be(tcp_rx + 8);
+        if (peer_ack != sequence + 1u) continue;
+
+        length = tcp_build(frame, dest_mac, destination, source_port, destination_port,
+                           sequence + 1u, peer_sequence + 1u, 0x10);
+        if (!rtl_send(frame, (uint16_t)length)) return 0;
+        return 1;
+    }
     return 0;
 }
 
