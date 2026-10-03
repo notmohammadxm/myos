@@ -202,12 +202,14 @@ static int rtl_send(const uint8_t* frame, uint16_t length) {
     io_out32((uint16_t)(io_base + RTL_TSD0), length);
     for (uint32_t i = 0; i < TX_TIMEOUT; ++i) {
         uint32_t status = io_in32((uint16_t)(io_base + RTL_TSD0));
-        if (status & 0x80000000u) continue;
-        if (!(status & 0x00008000u)) {
-            ++tx_packets;
-            return 1;
+        if (status & 0x2000u) {
+            if (status & 0x8000u) {
+                ++tx_packets;
+                return 1;
+            }
+            if (status & 0x40000000u) return 0;
+            if (status & 0x80000000u) return 0;
         }
-        if (status & 0x20000000u) return 0;
     }
     return 0;
 }
