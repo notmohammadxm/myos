@@ -407,6 +407,7 @@ static void print(const char* s);
 static void draw_banner(void);
 static void prompt(void);
 static void line_editor_set_cursor(void);
+static void redraw_line(void);
 static void pic_eoi(int irq);
 
 static void vga_cursor_set(uint16_t position) {
