@@ -2580,6 +2580,7 @@ void exception_handler(uint32_t interrupt_number) {
     print_uint(interrupt_number);
     print(")\nSystem halted.\n");
     log_event("Kernel exception");
+    if (gui_available()) gui_panic((int)interrupt_number);
     for (;;) cpu_halt();
 }
 
