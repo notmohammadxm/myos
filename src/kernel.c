@@ -1705,40 +1705,67 @@ static int pci_find_network(uint16_t* vendor, uint16_t* device) {
     return 0;
 }
 
+static void print_ipv4_value(uint32_t ip) {
+    print_uint((ip >> 24) & 0xFFu);
+    putc('.');
+    print_uint((ip >> 16) & 0xFFu);
+    putc('.');
+    print_uint((ip >> 8) & 0xFFu);
+    putc('.');
+    print_uint(ip & 0xFFu);
+}
+
 static void cmd_net(void) {
+    net_status_t status;
     uint16_t vendor = 0, device = 0;
+    net_get_status(&status);
 
     print("MyOS Network Status\n");
     print("-------------------\n");
-    if (pci_find_network(&vendor, &device)) {
-        print("NIC:        detected\n");
-        print("Vendor ID:  0x");
+    print("Driver:     ");
+    print(status.available ? "RTL8139" : "unavailable");
+    putc('\n');
+    print("Link:       ");
+    print(status.link_up ? "up" : "down");
+    putc('\n');
+    print("MAC:        ");
+    for (int i = 0; i < 6; ++i) {
+        if (i) putc(':');
+        print_hex8(status.mac[i]);
+    }
+    putc('\n');
+    print("IP:         "); print_ipv4_value(status.ip); putc('\n');
+    print("Gateway:    "); print_ipv4_value(status.gateway); putc('\n');
+    print("TX packets: "); print_uint(status.tx_packets); putc('\n');
+    print("RX packets: "); print_uint(status.rx_packets); putc('\n');
+    print("Ping ok:    "); print_uint(status.ping_success); putc('\n');
+    print("Ping fail:  "); print_uint(status.ping_fail); putc('\n');
+
+    if (!status.available && pci_find_network(&vendor, &device)) {
+        print("PCI NIC:    detected (unsupported driver) 0x");
         print_hex16(vendor);
-        putc('\n');
-        print("Device ID:  0x");
+        putc(':');
         print_hex16(device);
         putc('\n');
-        print("Link:       not queried (driver pending)\n");
-    } else {
-        print("NIC:        not detected via PCI\n");
     }
-
-    print("IP:         0.0.0.0\n");
-    print("DHCP:       not configured\n");
-    print("TCP/IP:     kernel stack not loaded\n");
-    print("Ping:       driver/stack required\n");
 }
 
 static void cmd_ping(const char* host) {
     if (!*host) {
-        print("Usage: ping HOST\n");
+        print("Usage: ping IPv4\n");
         return;
     }
-
-    print("ping ");
+    uint32_t ip = 0;
+    if (!net_parse_ipv4(host, &ip)) {
+        print("Invalid IPv4 address.\n");
+        return;
+    }
+    print("PING ");
     print(host);
-    print(": network driver and TCP/IP stack are not enabled yet.\n");
-    print("NIC discovery is available with: net\n");
+    print(": ");
+    if (net_ping_ipv4(ip)) print("reply received.");
+    else print("request timed out.");
+    putc('\n');
 }
 
 /* ---------- help ---------- */
@@ -2522,6 +2549,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     scheduler_init();
     fs_init();
     filesystem_gui_update();
+    net_init();
     cpu_sti();
 
     prompt();
