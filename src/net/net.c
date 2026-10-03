@@ -425,7 +425,7 @@ int net_tcp_connect(uint32_t destination, uint16_t destination_port) {
     if (!rtl_send(frame, (uint16_t)length)) return 0;
 
     for (uint32_t loops = 0; loops < PING_TIMEOUT; ++loops) {
-        uint8_t rx[1600];
+        uint8_t rx[1600] = {0};
         int n = rtl_receive(rx, sizeof(rx));
         if (n < 54 || get16be(rx + 12) != ETH_IPV4) continue;
         if ((rx[14] >> 4) != 4) continue;
