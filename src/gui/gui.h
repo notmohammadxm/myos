@@ -25,6 +25,18 @@ typedef struct {
     uint32_t size;
 } gui_file_info_t;
 
+typedef struct {
+    int available;
+    int link_up;
+    uint8_t mac[6];
+    uint32_t ip;
+    uint32_t gateway;
+    uint32_t tx_packets;
+    uint32_t rx_packets;
+    uint32_t ping_success;
+    uint32_t ping_fail;
+} gui_net_info_t;
+
 #define GUI_ACTION_THEME 1
 #define GUI_ACTION_REBOOT 2
 #define GUI_ACTION_SHUTDOWN 3
@@ -34,6 +46,7 @@ typedef struct {
 #define GUI_ACTION_FILE_CREATE 7
 #define GUI_ACTION_DIR_CREATE 8
 #define GUI_ACTION_FILE_OPEN 9
+#define GUI_ACTION_NET_PING 10
 
 #define GUI_ACTION_NONE 0
 
@@ -58,6 +71,8 @@ void gui_taskmgr_set_data(const gui_task_info_t* tasks, int count);
 void gui_taskmgr_open(void);
 void gui_filemgr_set_data(const gui_file_info_t* files, int count);
 void gui_filemgr_open(void);
+void gui_network_set_status(const gui_net_info_t* status);
+void gui_network_open(void);
 #ifdef UNIT_TEST
 int gui_test_calculate(const char* expression, int32_t* result);
 #endif
