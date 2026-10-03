@@ -902,6 +902,7 @@ static int launcher_match_at(int ordinal) {
 }
 
 static void open_launcher_app(int index) {
+    launcher_record_recent(index);
     if (index == 5) {
         gui_taskmgr_open();
         launcher_open = 0;
@@ -1723,19 +1724,22 @@ static int point_in_settings_row(int row) {
            mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
 }
 
+static void launcher_record_recent(int index) {
+    if (index < 0 || index >= 7) return;
+    int pos = 0;
+    while (pos < 7 && recent_apps[pos] != index) ++pos;
+    if (pos >= 7) pos = 6;
+    while (pos > 0) {
+        recent_apps[pos] = recent_apps[pos - 1];
+        --pos;
+    }
+    recent_apps[0] = index;
+}
+
 static void open_window(int index) {
     if (index < 0 || index >= WINDOW_COUNT) return;
     struct gui_window* w = &windows[index];
-    if (index < 5) {
-        int pos = 0;
-        while (pos < 5 && recent_apps[pos] != index) ++pos;
-        if (pos >= 5) pos = 4;
-        while (pos > 0) {
-            recent_apps[pos] = recent_apps[pos - 1];
-            --pos;
-        }
-        recent_apps[0] = index;
-    }
+    launcher_record_recent(index);
     if (!w->visible) {
         int dx, dy, dw, dh;
         dock_geometry(index, &dx, &dy, &dw, &dh);
@@ -1800,6 +1804,42 @@ static void finish_all_window_animations(void) {
 static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     (void)shift;
     if (!ready) return 0;
+
+    if (filemgr_open) {
+        if (event == GUI_KEY_ESCAPE) {
+            gui_filemgr_close();
+            return 1;
+        }
+        if (event == GUI_KEY_UP) {
+            if (file_count > 0) filemgr_selected = (filemgr_selected + file_count - 1) % file_count;
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == GUI_KEY_DOWN) {
+            if (file_count > 0) filemgr_selected = (filemgr_selected + 1) % file_count;
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == '\n' || event == '\r') {
+            if (filemgr_selected < file_count)
+                action_push_arg(GUI_ACTION_FILE_OPEN, file_data[filemgr_selected].index);
+            return 1;
+        }
+        if (event == 'n') {
+            action_push_arg(GUI_ACTION_FILE_CREATE, 0);
+            return 1;
+        }
+        if (event == 'd') {
+            action_push_arg(GUI_ACTION_DIR_CREATE, 0);
+            return 1;
+        }
+        if (event == 'x' || event == 8 || event == GUI_KEY_DELETE) {
+            if (filemgr_selected < file_count)
+                action_push_arg(GUI_ACTION_FILE_DELETE, file_data[filemgr_selected].index);
+            return 1;
+        }
+        return 1;
+    }
 
     if (taskmgr_open) {
         if (event == GUI_KEY_ESCAPE) {
@@ -2397,7 +2437,23 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     uint8_t released = (uint8_t)((new_buttons ^ mouse_prev_buttons) & mouse_prev_buttons);
 
     if (pressed & 1u) {
-        if (taskmgr_open) {
+        if (filemgr_open) {
+            int row = filemgr_pointer_row();
+            int button = filemgr_pointer_button();
+            if (row >= 0) {
+                filemgr_selected = row;
+                gui_request_redraw();
+            } else if (button == 1) {
+                action_push_arg(GUI_ACTION_FILE_CREATE, 0);
+                gui_request_redraw();
+            } else if (button == 2) {
+                action_push_arg(GUI_ACTION_DIR_CREATE, 0);
+                gui_request_redraw();
+            } else if (button == 3 && filemgr_selected < file_count) {
+                action_push_arg(GUI_ACTION_FILE_DELETE, file_data[filemgr_selected].index);
+                gui_request_redraw();
+            }
+        } else if (taskmgr_open) {
             int row = taskmgr_pointer_row();
             int button = taskmgr_pointer_button();
             if (row >= 0) {
