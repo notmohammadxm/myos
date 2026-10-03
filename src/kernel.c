@@ -4,6 +4,7 @@
 #include "graphics/renderer.h"
 #include "gui/gui.h"
 #include "drivers/mouse.h"
+#include "fs/fs.h"
 
 /* ============================================================
  * MyOS v0.5 - desktop-style operating environment
@@ -1087,6 +1088,94 @@ static void cmd_taskmgr_control(const char* arg) {
     }
     print("Usage: taskmgr | taskmgr terminate PID | taskmgr restart PID\n");
 }
+static void cmd_ls(void) {
+    fs_entry_t entries[FS_MAX_FILES];
+    int count = fs_list(entries, FS_MAX_FILES);
+    print("Filesystem entries:\n");
+    for (int i = 0; i < count; ++i) {
+        print(entries[i].directory ? "[DIR]  " : "[FILE] ");
+        print(entries[i].name);
+        if (!entries[i].directory) {
+            print("  ");
+            print_uint(entries[i].size);
+            print(" bytes");
+        }
+        putc('\n');
+    }
+}
+
+static void cmd_cat(const char* path) {
+    char data[FS_DATA_MAX];
+    int n = fs_read(path, data, sizeof(data));
+    if (n < 0) {
+        print("Unable to read file.\n");
+        return;
+    }
+    print(data);
+    if (n == 0 || data[n - 1] != '\n') putc('\n');
+}
+
+static void cmd_touch(const char* path, int directory) {
+    int result = directory ? fs_create_dir(path) : fs_create_file(path);
+    if (result < 0) print("Unable to create entry.\n");
+    else print(directory ? "Directory created.\n" : "File created.\n");
+}
+
+static void cmd_rm(const char* path) {
+    if (fs_delete(path)) print("Entry deleted.\n");
+    else print("Entry not found.\n");
+}
+
+static void cmd_mv(const char* arg) {
+    const char* p = arg;
+    while (*p == ' ') ++p;
+    const char* mid = p;
+    while (*mid && *mid != ' ') ++mid;
+    if (!*mid) {
+        print("Usage: mv OLD NEW\n");
+        return;
+    }
+    char old_path[FS_NAME_MAX];
+    int n = 0;
+    while (p < mid && n < FS_NAME_MAX - 1) old_path[n++] = *p++;
+    old_path[n] = 0;
+    while (*mid == ' ') ++mid;
+    if (!*mid || fs_rename(old_path, mid) == 0) print("Unable to rename entry.\n");
+    else print("Entry renamed.\n");
+}
+
+static void cmd_write_file(const char* arg) {
+    const char* p = arg;
+    while (*p == ' ') ++p;
+    const char* mid = p;
+    while (*mid && *mid != ' ') ++mid;
+    if (!*mid) {
+        print("Usage: write PATH TEXT\n");
+        return;
+    }
+    char path[FS_NAME_MAX];
+    int n = 0;
+    while (p < mid && n < FS_NAME_MAX - 1) path[n++] = *p++;
+    path[n] = 0;
+    while (*mid == ' ') ++mid;
+    if (!*mid || !fs_write(path, mid, (uint32_t)str_len(mid))) {
+        print("Unable to write file.\n");
+        return;
+    }
+    print("File written.\n");
+}
+
+static void cmd_fsinfo(void) {
+    print("Filesystem: RAMFS\n");
+    print("Entries:    ");
+    print_uint((uint32_t)fs_count());
+    print("\nMax entries: ");
+    print_uint(FS_MAX_FILES);
+    print("\nMax file size: ");
+    print_uint(FS_DATA_MAX - 1u);
+    print(" bytes\n");
+}
+
 /* ---------- Settings / profile ---------- */
 
 static int valid_name(const char* s, int max_len) {
@@ -1394,6 +1483,7 @@ static const char* command_names[] = {
     "history","profile","whoami","hostname","sysinfo","mem",
     "time","clock","date","calendar","taskmgr","settings","set",
     "notify","notifications","logs","net","ping","uptime",
+    "ls","cat","touch","mkdir","rm","mv","write","fsinfo",
     "reboot","shutdown"
 };
 
@@ -2017,6 +2107,26 @@ static void execute(const char* cmd) {
         command_arg_after(cmd, 8, &arg);
         cmd_taskmgr_control(arg);
     }
+    else if (streq(cmd, "ls")) cmd_ls();
+    else if (streq(cmd, "fsinfo")) cmd_fsinfo();
+    else if (starts_with(cmd, "cat ")) {
+        const char* arg; command_arg_after(cmd, 4, &arg); cmd_cat(arg);
+    }
+    else if (starts_with(cmd, "touch ")) {
+        const char* arg; command_arg_after(cmd, 6, &arg); cmd_touch(arg, 0);
+    }
+    else if (starts_with(cmd, "mkdir ")) {
+        const char* arg; command_arg_after(cmd, 6, &arg); cmd_touch(arg, 1);
+    }
+    else if (starts_with(cmd, "rm ")) {
+        const char* arg; command_arg_after(cmd, 3, &arg); cmd_rm(arg);
+    }
+    else if (starts_with(cmd, "mv ")) {
+        const char* arg; command_arg_after(cmd, 3, &arg); cmd_mv(arg);
+    }
+    else if (starts_with(cmd, "write ")) {
+        const char* arg; command_arg_after(cmd, 6, &arg); cmd_write_file(arg);
+    }
     else if (streq(cmd, "settings")) cmd_settings();
     else if (starts_with(cmd, "set ")) {
         const char* arg;
@@ -2351,6 +2461,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
     log_event("MyOS boot complete");
     notify_add("MyOS boot completed");
     scheduler_init();
+    fs_init();
     cpu_sti();
 
     prompt();
