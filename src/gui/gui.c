@@ -89,7 +89,7 @@ static int launcher_open;
 static int launcher_selected;
 static int launcher_query_len;
 static char launcher_query[32];
-static int recent_apps[7] = { 0, 1, 2, 3, 4, 5, 6 };
+static int recent_apps[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
 static int taskmgr_open;
 static int taskmgr_selected;
 static int taskmgr_sort_mode;
@@ -927,19 +927,19 @@ static int launcher_contains(const char* text_in, const char* query) {
 }
 
 static int launcher_match_count(void) {
-    const char* names[7] = {
+    const char* names[8] = {
         "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
-        "TASK MANAGER", "FILES"
+        "TASK MANAGER", "FILES", "SYSTEM LOGS"
     };
-    const char* desc[7] = {
+    const char* desc[8] = {
         "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
         "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL",
-        "FILE MANAGER AND STORAGE"
+        "FILE MANAGER AND STORAGE", "RECENT SYSTEM EVENTS"
     };
     int count = 0;
-    for (int pos = 0; pos < 7; ++pos) {
+    for (int pos = 0; pos < 8; ++pos) {
         int index = recent_apps[pos];
-        if (index < 0 || index >= 7) continue;
+        if (index < 0 || index >= 8) continue;
         if (launcher_contains(names[index], launcher_query) ||
             launcher_contains(desc[index], launcher_query)) {
             ++count;
@@ -950,17 +950,17 @@ static int launcher_match_count(void) {
 }
 
 static int launcher_match_at(int ordinal) {
-    const char* names[7] = {
+    const char* names[8] = {
         "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
-        "TASK MANAGER", "FILES"
+        "TASK MANAGER", "FILES", "SYSTEM LOGS"
     };
-    const char* desc[7] = {
+    const char* desc[8] = {
         "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
         "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL",
-        "FILE MANAGER AND STORAGE"
+        "FILE MANAGER AND STORAGE", "RECENT SYSTEM EVENTS"
     };
     int match = 0;
-    for (int pos = 0; pos < 7; ++pos) {
+    for (int pos = 0; pos < 8; ++pos) {
         int index = recent_apps[pos];
         if (index < 0 || index >= 7) continue;
         if (!launcher_contains(names[index], launcher_query) &&
@@ -978,10 +978,10 @@ static void launcher_reset_search(void) {
 }
 
 static void launcher_record_recent(int index) {
-    if (index < 0 || index >= 7) return;
+    if (index < 0 || index >= 8) return;
     int pos = 0;
-    while (pos < 7 && recent_apps[pos] != index) ++pos;
-    if (pos >= 7) pos = 6;
+    while (pos < 8 && recent_apps[pos] != index) ++pos;
+    if (pos >= 8) pos = 7;
     while (pos > 0) {
         recent_apps[pos] = recent_apps[pos - 1];
         --pos;
@@ -991,6 +991,12 @@ static void launcher_record_recent(int index) {
 
 static void open_launcher_app(int index) {
     launcher_record_recent(index);
+    if (index == 7) {
+        gui_log_open();
+        launcher_open = 0;
+        launcher_reset_search();
+        return;
+    }
     if (index == 5) {
         gui_taskmgr_open();
         return;
@@ -1032,9 +1038,9 @@ static void draw_launcher(void) {
     if (matches == 0) {
         draw_text_centered(x + 18, y + 130, width - 36, "NO APPLICATIONS FOUND", muted);
     } else {
-        const char* names[7] = {
+        const char* names[8] = {
             "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
-            "TASK MANAGER", "FILES"
+            "TASK MANAGER", "FILES", "SYSTEM LOGS"
         };
         for (int ordinal = 0; ordinal < matches && ordinal < 5; ++ordinal) {
             int index = launcher_match_at(ordinal);
@@ -2075,7 +2081,7 @@ void gui_init(void) {
     launcher_selected = 0;
     launcher_query_len = 0;
     launcher_query[0] = 0;
-    for (int i = 0; i < 7; ++i) recent_apps[i] = i;
+    for (int i = 0; i < 8; ++i) recent_apps[i] = i;
     taskmgr_open = 0;
     taskmgr_selected = 0;
     taskmgr_sort_mode = 0;
