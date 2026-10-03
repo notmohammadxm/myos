@@ -866,7 +866,10 @@ static int launcher_match_count(void) {
         int index = recent_apps[pos];
         if (index < 0 || index >= 6) continue;
         if (launcher_contains(names[index], launcher_query) ||
-            launcher_contains(desc[index], launcher_query)) ++count;
+            launcher_contains(desc[index], launcher_query)) {
+            ++count;
+            if (count >= 5) break;
+        }
     }
     return count;
 }
@@ -1432,7 +1435,7 @@ void gui_taskmgr_set_data(const gui_task_info_t* tasks,int count){
     task_count=max_int(0,min_int(count,8));
     for(int i=0;i<task_count;++i) task_data[i]=tasks[i];
     taskmgr_sort_data();
-    gui_request_redraw();
+    if (taskmgr_open) gui_request_redraw();
 }
 
 void gui_taskmgr_open(void){
