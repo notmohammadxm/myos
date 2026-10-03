@@ -1751,7 +1751,7 @@ static const char* command_names[] = {
     "history","profile","whoami","hostname","sysinfo","mem",
     "time","clock","date","calendar","taskmgr","hardware","settings","set",
     "notify","notifications","logs","net","ping","uptime",
-    "ls","cat","touch","mkdir","rm","mv","write","fsinfo","disk",
+    "ls","cat","touch","mkdir","rm","mv","write","fsinfo","disk","tcpconnect",
     "reboot","shutdown"
 };
 
@@ -1991,6 +1991,39 @@ static void cmd_net(void) {
         print_hex16(device);
         putc('\n');
     }
+}
+
+static void cmd_tcpconnect(const char* arg) {
+    const char* p = arg;
+    while (*p == ' ') ++p;
+    uint32_t ip = 0;
+    int n = 0;
+    if (!net_parse_ipv4(p, &ip)) {
+        print("Usage: tcpconnect IPv4 PORT\n");
+        return;
+    }
+    while (p[n] && p[n] != ':') ++n;
+    if (!p[n] || p[n+1] == 0) {
+        print("Usage: tcpconnect IPv4 PORT\n");
+        return;
+    }
+    uint32_t port = 0;
+    const char* q = p + n + 1;
+    int found = 0;
+    while (*q >= '0' && *q <= '9') {
+        port = port * 10u + (uint32_t)(*q - '0');
+        found = 1;
+        ++q;
+    }
+    if (!found || *q || port == 0 || port > 65535u) {
+        print("Usage: tcpconnect IPv4:PORT\n");
+        return;
+    }
+    print("TCP CONNECT ");
+    print(p);
+    print(": ");
+    print(net_tcp_connect(ip, (uint16_t)port) ? "connected." : "failed.");
+    putc('\n');
 }
 
 static void cmd_ping(const char* host) {
@@ -2490,6 +2523,11 @@ static void execute(const char* cmd) {
         cmd_ping(arg);
     }
     else if (streq(cmd, "ping")) cmd_ping("");
+    else if (starts_with(cmd, "tcpconnect ")) {
+        const char* arg;
+        command_arg_after(cmd, 11, &arg);
+        cmd_tcpconnect(arg);
+    }
     else if (streq(cmd, "reboot")) {
         print_color("\n[*] Rebooting MyOS...\n", 0x0E);
         log_event("Reboot requested");
