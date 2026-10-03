@@ -156,6 +156,51 @@ static void test_framebuffer_gui(void) {
     munmap(fb, page * 1024u);
 }
 
+static void test_filesystem(void) {
+    fs_init();
+    check(fs_available());
+    check(fs_count() >= 5);
+
+    char data[FS_DATA_MAX];
+    int n = fs_read("/home/readme.txt", data, sizeof(data));
+    check(n == 16 && data[0] == 'w' && data[1] == 'e');
+
+    int index = fs_create_file("/home/unit-test.txt");
+    check(index > 0);
+    check(fs_write("/home/unit-test.txt", "abc", 3));
+    n = fs_read("/home/unit-test.txt", data, sizeof(data));
+    check(n == 3 && data[0] == 'a' && data[2] == 'c');
+    check(fs_rename("/home/unit-test.txt", "/home/unit-test-renamed.txt"));
+    check(fs_stat("/home/unit-test-renamed.txt", 0) == 0);
+    check(fs_delete("/home/unit-test-renamed.txt"));
+    check(!fs_delete("/"));
+    check(fs_create_file("relative.txt") < 0);
+}
+
+static void test_scheduler_model(void) {
+    scheduler_init();
+    check(process_count == PROCESS_MAX);
+    check(scheduler_current >= 0 && scheduler_current < process_count);
+    check(processes[scheduler_current].state == PROCESS_RUNNING);
+    int first = scheduler_current;
+    for (int i = 0; i < SCHED_QUANTUM; ++i) {
+        ++timer_ticks;
+        scheduler_tick();
+    }
+    check(scheduler_current != first);
+}
+
+static void test_mouse_sensitivity(void) {
+    mouse_set_sensitivity(200);
+    check(mouse_get_sensitivity() == 200);
+    mouse_set_sensitivity(1);
+    check(mouse_get_sensitivity() == 25);
+    mouse_set_sensitivity(255);
+    check(mouse_get_sensitivity() == 200);
+    mouse_set_sensitivity(100);
+    check(mouse_get_sensitivity() == 100);
+}
+
 static void test_line_editor(void) {
     for (int i = 0; i < VGA_CELLS; ++i) unit_test_vga[i] = 0x0A20;
 
@@ -208,6 +253,9 @@ int test_main(void) {
     test_completion_prefix();
     test_acpi_s5_parser();
     test_line_editor();
+    test_filesystem();
+    test_scheduler_model();
+    test_mouse_sensitivity();
     test_framebuffer_gui();
     test_network_helpers();
     test_font_presence();

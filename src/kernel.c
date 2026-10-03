@@ -2851,6 +2851,8 @@ void kernel_main(uint32_t magic, void* mb_info) {
     net_init();
     network_gui_update();
     ata_init();
+    if (ata_available()) debug_write("MYOS_ATA_READY\n");
+    else debug_write("MYOS_ATA_UNAVAILABLE\n");
     settings_init();
     if (settings_load(&runtime_settings)) settings_apply_loaded(&runtime_settings);
     saved_settings = runtime_settings;
