@@ -73,6 +73,7 @@ void gui_filemgr_set_data(const gui_file_info_t* files, int count);
 void gui_filemgr_open(void);
 void gui_network_set_status(const gui_net_info_t* status);
 void gui_network_open(void);
+void gui_panic(int code);
 #ifdef UNIT_TEST
 int gui_test_calculate(const char* expression, int32_t* result);
 #endif
