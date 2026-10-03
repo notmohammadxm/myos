@@ -219,6 +219,15 @@ static inline uint32_t inl(uint16_t port) {
 }
 #endif
 
+static void debug_putc(char c) {
+    outb(0xE9, (uint8_t)c);
+}
+
+static void debug_write(const char* s) {
+    if (!s) return;
+    while (*s) debug_putc(*s++);
+}
+
 static inline void io_wait(void) {
     outb(0x80, 0);
 }
@@ -2568,6 +2577,9 @@ void kernel_main(uint32_t magic, void* mb_info) {
     filesystem_gui_update();
     net_init();
     network_gui_update();
+    debug_write("MYOS_READY\n");
+    if (net_available()) debug_write("MYOS_NET_READY\n");
+    else debug_write("MYOS_NET_UNAVAILABLE\n");
     cpu_sti();
 
     prompt();
