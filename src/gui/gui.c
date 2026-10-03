@@ -89,7 +89,7 @@ static int launcher_open;
 static int launcher_selected;
 static int launcher_query_len;
 static char launcher_query[32];
-static int recent_apps[6] = { 0, 1, 2, 3, 4, 5 };
+static int recent_apps[7] = { 0, 1, 2, 3, 4, 5, 6 };
 static int quick_settings_open;
 static int notification_open = 1;
 static int notifications_enabled = 1;
@@ -102,6 +102,10 @@ static int taskmgr_sort_mode;
 static gui_task_info_t task_data[8];
 static int task_count;
 static int task_order[8];
+static int filemgr_open;
+static int filemgr_selected;
+static gui_file_info_t file_data[16];
+static int file_count;
 static char calc_display[32] = "0";
 static int calc_has_value;
 static int calc_replace_next;
@@ -853,16 +857,17 @@ static int launcher_contains(const char* text_in, const char* query) {
 }
 
 static int launcher_match_count(void) {
-    const char* names[6] = {
+    const char* names[7] = {
         "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
-        "TASK MANAGER"
+        "TASK MANAGER", "FILES"
     };
-    const char* desc[6] = {
+    const char* desc[7] = {
         "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
-        "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL"
+        "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL",
+        "FILE MANAGER AND STORAGE"
     };
     int count = 0;
-    for (int pos = 0; pos < 6; ++pos) {
+    for (int pos = 0; pos < 7; ++pos) {
         int index = recent_apps[pos];
         if (index < 0 || index >= 6) continue;
         if (launcher_contains(names[index], launcher_query) ||
@@ -875,13 +880,14 @@ static int launcher_match_count(void) {
 }
 
 static int launcher_match_at(int ordinal) {
-    const char* names[6] = {
+    const char* names[7] = {
         "TERMINAL", "SYSTEM INFORMATION", "SETTINGS", "CALCULATOR", "SYSTEM MONITOR",
-        "TASK MANAGER"
+        "TASK MANAGER", "FILES"
     };
-    const char* desc[6] = {
+    const char* desc[7] = {
         "SHELL AND COMMAND CENTER", "HARDWARE AND DISPLAY", "THEME AND SESSION",
-        "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL"
+        "FAST INTEGER MATH", "LIVE RUNTIME STATUS", "PROCESSES AND RESOURCE CONTROL",
+        "FILE MANAGER AND STORAGE"
     };
     int match = 0;
     for (int pos = 0; pos < 6; ++pos) {
@@ -896,8 +902,16 @@ static int launcher_match_at(int ordinal) {
 }
 
 static void open_launcher_app(int index) {
+    launcher_record_recent(index);
     if (index == 5) {
         gui_taskmgr_open();
+        launcher_open = 0;
+        launcher_reset_search();
+        gui_request_redraw();
+        return;
+    }
+    if (index == 6) {
+        gui_filemgr_open();
         launcher_open = 0;
         launcher_reset_search();
         gui_request_redraw();
@@ -1469,6 +1483,105 @@ static int taskmgr_pointer_button(void){
     return 0;
 }
 
+static void draw_file_manager(void) {
+    if (!filemgr_open) return;
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    int width = 760, height = 440;
+    if ((int)f->width < width + 24) width = (int)f->width - 24;
+    if ((int)f->height < height + TOPBAR_H + FOOTER_H) height = (int)f->height - TOPBAR_H - FOOTER_H - 24;
+    if (height < 330) height = 330;
+    int x = ((int)f->width - width) / 2;
+    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
+    draw_round_card(x, y, width, height, 20, panel2, accent);
+    draw_text(x + 22, y + 18, "FILES", accent);
+    draw_text(x + 22, y + 40, "RAMFS /", muted);
+    draw_round_card(x + 18, y + 62, width - 36, 38, 11, bg, border);
+    draw_text(x + 32, y + 73, "/home", text);
+    draw_text(x + width - 96, y + 73, "ROOT", accent);
+    int rows = (height - 150) / 34;
+    if (rows > 10) rows = 10;
+    for (int row = 0; row < file_count && row < rows; ++row) {
+        int yy = y + 110 + row * 34;
+        int active = row == filemgr_selected;
+        draw_round_card(x + 18, yy - 2, width - 36, 30, 9, active ? panel : bg, active ? accent : border);
+        if (file_data[row].directory) draw_icon_system(x + 30, yy + 6, active ? accent : warning);
+        else draw_icon_terminal(x + 30, yy + 6, active ? accent : muted);
+        draw_text_clipped(x + 64, yy + 5, file_data[row].name, active ? text : muted, 430);
+        if (file_data[row].directory) draw_text(x + width - 112, yy + 5, "DIR", warning);
+        else {
+            draw_uint_text(x + width - 112, yy + 5, file_data[row].size, muted);
+            draw_text(x + width - 72, yy + 5, "B", muted);
+        }
+    }
+    draw_round_card(x + 18, y + height - 78, 94, 30, 10, bg, border);
+    draw_round_card(x + 120, y + height - 78, 94, 30, 10, bg, border);
+    draw_round_card(x + 222, y + height - 78, 94, 30, 10, bg, border);
+    draw_text_centered(x + 18, y + height - 71, 94, "NEW FILE", success);
+    draw_text_centered(x + 120, y + height - 71, 94, "NEW FOLDER", warning);
+    draw_text_centered(x + 222, y + height - 71, 94, "DELETE", danger);
+    draw_text(x + 336, y + height - 71, "ENTER OPEN   ESC CLOSE", muted);
+}
+
+void gui_filemgr_set_data(const gui_file_info_t* files, int count) {
+    if (!ready || !files) return;
+    file_count = max_int(0, min_int(count, 16));
+    for (int i = 0; i < file_count; ++i) file_data[i] = files[i];
+    if (filemgr_selected >= file_count) filemgr_selected = max_int(0, file_count - 1);
+    if (filemgr_open) gui_request_redraw();
+}
+
+void gui_filemgr_open(void) {
+    if (!ready) return;
+    filemgr_open = 1;
+    filemgr_selected = 0;
+    launcher_open = 0;
+    quick_settings_open = 0;
+    notification_open = 0;
+    power_open = 0;
+    taskmgr_open = 0;
+    focused_window = -1;
+    gui_request_redraw();
+}
+
+static void gui_filemgr_close(void) {
+    filemgr_open = 0;
+    notification_open = 0;
+    gui_request_redraw();
+}
+
+static int filemgr_pointer_row(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f || !filemgr_open) return -1;
+    int w = 760, h = 440;
+    if ((int)f->width < w + 24) w = (int)f->width - 24;
+    if ((int)f->height < h + TOPBAR_H + FOOTER_H) h = (int)f->height - TOPBAR_H - FOOTER_H - 24;
+    if (h < 330) h = 330;
+    int x = ((int)f->width - w) / 2;
+    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - h) / 2;
+    if (mouse_x_pos < x + 18 || mouse_x_pos >= x + w - 18 || mouse_y_pos < y + 108) return -1;
+    int row = (mouse_y_pos - y - 108) / 34;
+    if (row < 0 || row >= file_count || row >= 10 || (mouse_y_pos - y - 108) % 34 >= 30) return -1;
+    return row;
+}
+
+static int filemgr_pointer_button(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f || !filemgr_open) return 0;
+    int w = 760, h = 440;
+    if ((int)f->width < w + 24) w = (int)f->width - 24;
+    if ((int)f->height < h + TOPBAR_H + FOOTER_H) h = (int)f->height - 24;
+    if (h < 330) h = 330;
+    int x = ((int)f->width - w) / 2;
+    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - h) / 2;
+    if (mouse_y_pos < y + h - 78 || mouse_y_pos >= y + h - 48) return 0;
+    if (mouse_x_pos >= x + 18 && mouse_x_pos < x + 112) return 1;
+    if (mouse_x_pos >= x + 120 && mouse_x_pos < x + 214) return 2;
+    if (mouse_x_pos >= x + 222 && mouse_x_pos < x + 316) return 3;
+    return 0;
+}
+
 static void draw_power_menu(void) {
     if (!power_open) return;
     const framebuffer_info_t* f = framebuffer_info();
@@ -1611,19 +1724,22 @@ static int point_in_settings_row(int row) {
            mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
 }
 
+static void launcher_record_recent(int index) {
+    if (index < 0 || index >= 7) return;
+    int pos = 0;
+    while (pos < 7 && recent_apps[pos] != index) ++pos;
+    if (pos >= 7) pos = 6;
+    while (pos > 0) {
+        recent_apps[pos] = recent_apps[pos - 1];
+        --pos;
+    }
+    recent_apps[0] = index;
+}
+
 static void open_window(int index) {
     if (index < 0 || index >= WINDOW_COUNT) return;
     struct gui_window* w = &windows[index];
-    if (index < 5) {
-        int pos = 0;
-        while (pos < 5 && recent_apps[pos] != index) ++pos;
-        if (pos >= 5) pos = 4;
-        while (pos > 0) {
-            recent_apps[pos] = recent_apps[pos - 1];
-            --pos;
-        }
-        recent_apps[0] = index;
-    }
+    launcher_record_recent(index);
     if (!w->visible) {
         int dx, dy, dw, dh;
         dock_geometry(index, &dx, &dy, &dw, &dh);
@@ -1688,6 +1804,42 @@ static void finish_all_window_animations(void) {
 static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     (void)shift;
     if (!ready) return 0;
+
+    if (filemgr_open) {
+        if (event == GUI_KEY_ESCAPE) {
+            gui_filemgr_close();
+            return 1;
+        }
+        if (event == GUI_KEY_UP) {
+            if (file_count > 0) filemgr_selected = (filemgr_selected + file_count - 1) % file_count;
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == GUI_KEY_DOWN) {
+            if (file_count > 0) filemgr_selected = (filemgr_selected + 1) % file_count;
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == '\n' || event == '\r') {
+            if (filemgr_selected < file_count)
+                action_push_arg(GUI_ACTION_FILE_OPEN, file_data[filemgr_selected].index);
+            return 1;
+        }
+        if (event == 'n') {
+            action_push_arg(GUI_ACTION_FILE_CREATE, 0);
+            return 1;
+        }
+        if (event == 'd') {
+            action_push_arg(GUI_ACTION_DIR_CREATE, 0);
+            return 1;
+        }
+        if (event == 'x' || event == 8 || event == GUI_KEY_DELETE) {
+            if (filemgr_selected < file_count)
+                action_push_arg(GUI_ACTION_FILE_DELETE, file_data[filemgr_selected].index);
+            return 1;
+        }
+        return 1;
+    }
 
     if (taskmgr_open) {
         if (event == GUI_KEY_ESCAPE) {
@@ -1858,7 +2010,7 @@ void gui_init(void) {
     launcher_selected = 0;
     launcher_query_len = 0;
     launcher_query[0] = 0;
-    for (int i = 0; i < 6; ++i) recent_apps[i] = i;
+    for (int i = 0; i < 7; ++i) recent_apps[i] = i;
     quick_settings_open = 0;
     notification_open = 1;
     notifications_cleared = 0;
@@ -2054,6 +2206,7 @@ void gui_redraw(void) {
     }
 
     draw_task_manager();
+    draw_file_manager();
     draw_notification();
     draw_power_menu();
     draw_quick_settings();
@@ -2284,7 +2437,23 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     uint8_t released = (uint8_t)((new_buttons ^ mouse_prev_buttons) & mouse_prev_buttons);
 
     if (pressed & 1u) {
-        if (taskmgr_open) {
+        if (filemgr_open) {
+            int row = filemgr_pointer_row();
+            int button = filemgr_pointer_button();
+            if (row >= 0) {
+                filemgr_selected = row;
+                gui_request_redraw();
+            } else if (button == 1) {
+                action_push_arg(GUI_ACTION_FILE_CREATE, 0);
+                gui_request_redraw();
+            } else if (button == 2) {
+                action_push_arg(GUI_ACTION_DIR_CREATE, 0);
+                gui_request_redraw();
+            } else if (button == 3 && filemgr_selected < file_count) {
+                action_push_arg(GUI_ACTION_FILE_DELETE, file_data[filemgr_selected].index);
+                gui_request_redraw();
+            }
+        } else if (taskmgr_open) {
             int row = taskmgr_pointer_row();
             int button = taskmgr_pointer_button();
             if (row >= 0) {

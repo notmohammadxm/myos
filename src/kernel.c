@@ -4,6 +4,7 @@
 #include "graphics/renderer.h"
 #include "gui/gui.h"
 #include "drivers/mouse.h"
+#include "fs/fs.h"
 
 /* ============================================================
  * MyOS v0.5 - desktop-style operating environment
@@ -1087,6 +1088,153 @@ static void cmd_taskmgr_control(const char* arg) {
     }
     print("Usage: taskmgr | taskmgr terminate PID | taskmgr restart PID\n");
 }
+static void cmd_ls(void) {
+    fs_entry_t entries[FS_MAX_FILES];
+    int count = fs_list(entries, FS_MAX_FILES);
+    print("Filesystem entries:\n");
+    for (int i = 0; i < count; ++i) {
+        print(entries[i].directory ? "[DIR]  " : "[FILE] ");
+        print(entries[i].name);
+        if (!entries[i].directory) {
+            print("  ");
+            print_uint(entries[i].size);
+            print(" bytes");
+        }
+        putc('\n');
+    }
+}
+
+static void cmd_cat(const char* path) {
+    char data[FS_DATA_MAX];
+    int n = fs_read(path, data, sizeof(data));
+    if (n < 0) {
+        print("Unable to read file.\n");
+        return;
+    }
+    print(data);
+    if (n == 0 || data[n - 1] != '\n') putc('\n');
+}
+
+static void cmd_touch(const char* path, int directory) {
+    int result = directory ? fs_create_dir(path) : fs_create_file(path);
+    if (result < 0) print("Unable to create entry.\n");
+    else print(directory ? "Directory created.\n" : "File created.\n");
+}
+
+static void cmd_rm(const char* path) {
+    if (fs_delete(path)) print("Entry deleted.\n");
+    else print("Entry not found.\n");
+}
+
+static void cmd_mv(const char* arg) {
+    const char* p = arg;
+    while (*p == ' ') ++p;
+    const char* mid = p;
+    while (*mid && *mid != ' ') ++mid;
+    if (!*mid) {
+        print("Usage: mv OLD NEW\n");
+        return;
+    }
+    char old_path[FS_NAME_MAX];
+    int n = 0;
+    while (p < mid && n < FS_NAME_MAX - 1) old_path[n++] = *p++;
+    old_path[n] = 0;
+    while (*mid == ' ') ++mid;
+    if (!*mid || fs_rename(old_path, mid) == 0) print("Unable to rename entry.\n");
+    else print("Entry renamed.\n");
+}
+
+static void cmd_write_file(const char* arg) {
+    const char* p = arg;
+    while (*p == ' ') ++p;
+    const char* mid = p;
+    while (*mid && *mid != ' ') ++mid;
+    if (!*mid) {
+        print("Usage: write PATH TEXT\n");
+        return;
+    }
+    char path[FS_NAME_MAX];
+    int n = 0;
+    while (p < mid && n < FS_NAME_MAX - 1) path[n++] = *p++;
+    path[n] = 0;
+    while (*mid == ' ') ++mid;
+    if (!*mid || !fs_write(path, mid, (uint32_t)str_len(mid))) {
+        print("Unable to write file.\n");
+        return;
+    }
+    print("File written.\n");
+}
+
+static void cmd_fsinfo(void) {
+    print("Filesystem: RAMFS\n");
+    print("Entries:    ");
+    print_uint((uint32_t)fs_count());
+    print("\nMax entries: ");
+    print_uint(FS_MAX_FILES);
+    print("\nMax file size: ");
+    print_uint(FS_DATA_MAX - 1u);
+    print(" bytes\n");
+}
+
+static void filesystem_gui_update(void) {
+    fs_entry_t entries[16];
+    gui_file_info_t snapshot[16];
+    int count = fs_list(entries, 16);
+    for (int i = 0; i < count; ++i) {
+        snapshot[i].index = entries[i].index;
+        str_copy(snapshot[i].name, entries[i].name, (int)sizeof(snapshot[i].name));
+        snapshot[i].directory = entries[i].directory;
+        snapshot[i].size = entries[i].size;
+    }
+    gui_filemgr_set_data(snapshot, count);
+}
+
+static void fs_create_default(int directory) {
+    static const char* file_names[] = {
+        "/home/newfile.txt", "/home/newfile2.txt", "/home/newfile3.txt",
+        "/desktop/newfile.txt", "/downloads/newfile.txt"
+    };
+    static const char* dir_names[] = {
+        "/home/newfolder", "/home/newfolder2", "/desktop/newfolder"
+    };
+    const char** names = directory ? dir_names : file_names;
+    int count = directory ? (int)(sizeof(dir_names) / sizeof(dir_names[0]))
+                          : (int)(sizeof(file_names) / sizeof(file_names[0]));
+    for (int i = 0; i < count; ++i) {
+        int result = directory ? fs_create_dir(names[i]) : fs_create_file(names[i]);
+        if (result >= 0) {
+            if (!directory) fs_write(names[i], "", 0);
+            return;
+        }
+    }
+}
+
+static void fs_open_index(int index) {
+    fs_entry_t entry;
+    if (!fs_stat("/", &entry)) return;
+    if (index < 0 || !fs_stat(fs_data(index) ? fs_data(index) : "/", &entry)) {
+        fs_entry_t list[FS_MAX_FILES];
+        int count = fs_list(list, FS_MAX_FILES);
+        for (int i = 0; i < count; ++i) {
+            if (list[i].index == index) {
+                entry = list[i];
+                break;
+            }
+        }
+    }
+    if (entry.index != index || entry.directory) return;
+    char data[FS_DATA_MAX];
+    int n = fs_read(entry.name, data, sizeof(data));
+    gui_open_window(0);
+    print("\n--- ");
+    print(entry.name);
+    print(" ---\n");
+    if (n >= 0) print(data);
+    else print("Unable to read file.");
+    putc('\n');
+    prompt();
+}
+
 /* ---------- Settings / profile ---------- */
 
 static int valid_name(const char* s, int max_len) {
@@ -1394,6 +1542,7 @@ static const char* command_names[] = {
     "history","profile","whoami","hostname","sysinfo","mem",
     "time","clock","date","calendar","taskmgr","settings","set",
     "notify","notifications","logs","net","ping","uptime",
+    "ls","cat","touch","mkdir","rm","mv","write","fsinfo",
     "reboot","shutdown"
 };
 
@@ -2017,6 +2166,26 @@ static void execute(const char* cmd) {
         command_arg_after(cmd, 8, &arg);
         cmd_taskmgr_control(arg);
     }
+    else if (streq(cmd, "ls")) cmd_ls();
+    else if (streq(cmd, "fsinfo")) cmd_fsinfo();
+    else if (starts_with(cmd, "cat ")) {
+        const char* arg; command_arg_after(cmd, 4, &arg); cmd_cat(arg);
+    }
+    else if (starts_with(cmd, "touch ")) {
+        const char* arg; command_arg_after(cmd, 6, &arg); cmd_touch(arg, 0);
+    }
+    else if (starts_with(cmd, "mkdir ")) {
+        const char* arg; command_arg_after(cmd, 6, &arg); cmd_touch(arg, 1);
+    }
+    else if (starts_with(cmd, "rm ")) {
+        const char* arg; command_arg_after(cmd, 3, &arg); cmd_rm(arg);
+    }
+    else if (starts_with(cmd, "mv ")) {
+        const char* arg; command_arg_after(cmd, 3, &arg); cmd_mv(arg);
+    }
+    else if (starts_with(cmd, "write ")) {
+        const char* arg; command_arg_after(cmd, 6, &arg); cmd_write_file(arg);
+    }
     else if (streq(cmd, "settings")) cmd_settings();
     else if (starts_with(cmd, "set ")) {
         const char* arg;
@@ -2351,6 +2520,8 @@ void kernel_main(uint32_t magic, void* mb_info) {
     log_event("MyOS boot complete");
     notify_add("MyOS boot completed");
     scheduler_init();
+    fs_init();
+    filesystem_gui_update();
     cpu_sti();
 
     prompt();
@@ -2509,7 +2680,10 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 line_editor_set_cursor();
             }
 
-            if ((timer_ticks % 25u) == 0u) scheduler_gui_update();
+            if ((timer_ticks % 25u) == 0u) {
+                scheduler_gui_update();
+                filesystem_gui_update();
+            }
 
             gui_action_t action;
             while (gui_poll_action(&action)) {
@@ -2519,6 +2693,19 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     if (!scheduler_control((uint32_t)action.arg, 1)) log_event("Task terminate rejected");
                 } else if (action.type == GUI_ACTION_TASK_RESTART) {
                     if (!scheduler_control((uint32_t)action.arg, 0)) log_event("Task restart rejected");
+                } else if (action.type == GUI_ACTION_FILE_DELETE) {
+                    if (fs_delete_index(action.arg)) {
+                        log_event("File deleted from GUI");
+                        notify_add("File deleted");
+                    }
+                } else if (action.type == GUI_ACTION_FILE_CREATE) {
+                    fs_create_default(0);
+                    log_event("File created from GUI");
+                } else if (action.type == GUI_ACTION_DIR_CREATE) {
+                    fs_create_default(1);
+                    log_event("Folder created from GUI");
+                } else if (action.type == GUI_ACTION_FILE_OPEN) {
+                    fs_open_index(action.arg);
                 } else if (action.type == GUI_ACTION_THEME) {
                     static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono", "light" };
                     int next_theme = 0;

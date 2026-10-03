@@ -13,7 +13,7 @@ LDFLAGS  = -m elf_i386 -T src/linker.ld -nostdlib \
            -z max-page-size=0x1000 --build-id=none
 
 KERNEL_OBJS = build/boot.o build/int.o build/kernel.o \
-              build/framebuffer.o build/renderer.o build/font.o build/gui.o build/mouse.o
+              build/framebuffer.o build/renderer.o build/font.o build/gui.o build/mouse.o build/fs.o
 
 all: myos.iso
 
@@ -48,11 +48,15 @@ build/gui.o: src/gui/gui.c src/gui/gui.h src/graphics/renderer.h src/graphics/fr
 	@mkdir -p build
 	$(CC) $(CFLAGS) -c $< -o $@
 
+build/fs.o: src/fs/fs.c src/fs/fs.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -c $< -o $@
+
 build/mouse.o: src/drivers/mouse.c src/drivers/mouse.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -c $< -o $@
 
-build/unit-test: tests/unit.c src/graphics/framebuffer.c src/graphics/renderer.c src/graphics/font.c src/gui/gui.c src/drivers/mouse.c
+build/unit-test: tests/unit.c src/graphics/framebuffer.c src/graphics/renderer.c src/graphics/font.c src/gui/gui.c src/drivers/mouse.c src/fs/fs.c
 	@mkdir -p build
 	$(TEST_CC) $(TEST_CFLAGS) -DUNIT_TEST -o $@ $^
 
