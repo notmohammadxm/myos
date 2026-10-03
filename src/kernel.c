@@ -6,6 +6,8 @@
 #include "drivers/mouse.h"
 #include "fs/fs.h"
 #include "net/net.h"
+#include "storage/ata.h"
+#include "settings/settings.h"
 
 /* ============================================================
  * MyOS v0.5 - desktop-style operating environment
@@ -118,6 +120,8 @@ static int history_cursor = 0;
 static char username[16] = "admin";
 static char hostname[24] = "myos";
 static const char* current_theme = "matrix";
+static settings_state_t runtime_settings;
+static settings_state_t saved_settings;
 
 static char logs[LOG_COUNT][LOG_LEN];
 static int log_count = 0;
@@ -1313,15 +1317,106 @@ static void cmd_profile(void) {
     print("Theme    : "); print(current_theme); putc('\n');
 }
 
-static void cmd_settings(void) {
+static void settings_snapshot(settings_state_t* out) {
+    if (!out) return;
+    str_copy(out->theme, current_theme, sizeof(out->theme));
+    str_copy(out->username, username, sizeof(out->username));
+    str_copy(out->hostname, hostname, sizeof(out->hostname));
+    gui_preferences_t prefs;
+    gui_get_preferences(&prefs);
+    out->notifications = (uint8_t)prefs.notifications_enabled;
+    out->animations = (uint8_t)prefs.animations_enabled;
+    out->clock_24h = (uint8_t)prefs.clock_24h;
+    out->mouse_sensitivity = mouse_get_sensitivity();
+    out->terminal_scrollback = 48;
+}
+
+static int settings_equal(const settings_state_t* a, const settings_state_t* b) {
+    if (!a || !b) return 0;
+    if (!streq(a->theme,b->theme) || !streq(a->username,b->username) || !streq(a->hostname,b->hostname)) return 0;
+    return a->notifications==b->notifications && a->animations==b->animations &&
+           a->mouse_sensitivity==b->mouse_sensitivity && a->clock_24h==b->clock_24h &&
+           a->terminal_scrollback==b->terminal_scrollback;
+}
+
+static void settings_save_runtime(void) {
+    settings_snapshot(&runtime_settings);
+    if (!settings_persistent()) return;
+    if (settings_save(&runtime_settings)) saved_settings = runtime_settings;
+}
+
+static void settings_apply_loaded(const settings_state_t* s) {
+    if (!s) return;
+    if (s->theme[0]) {
+        current_theme = 0;
+        for (size_t i=0;i<sizeof(themes)/sizeof(themes[0]);++i)
+            if (streq(s->theme,themes[i].name)) current_theme = themes[i].name;
+        gui_set_theme(current_theme);
+    }
+    if (s->username[0]) str_copy(username,s->username,sizeof(username));
+    if (s->hostname[0]) str_copy(hostname,s->hostname,sizeof(hostname));
+    mouse_set_sensitivity(s->mouse_sensitivity);
+    gui_preferences_t prefs;
+    prefs.notifications_enabled=s->notifications?1:0;
+    prefs.animations_enabled=s->animations?1:0;
+    prefs.clock_24h=s->clock_24h?1:0;
+    gui_set_preferences(&prefs);
+}
+
+static void cmd_settings(const char* arg) {
+    while (*arg==' ') ++arg;
+    if (streq(arg,"save")) {
+        settings_save_runtime();
+        print(settings_persistent() ? "Settings saved.\n" : "Persistent storage is not enabled.\n");
+        return;
+    }
+    if (streq(arg,"load")) {
+        if (!settings_persistent()) {
+            print("Persistent storage is not enabled.\n");
+            return;
+        }
+        if (settings_load(&runtime_settings)) {
+            settings_apply_loaded(&runtime_settings);
+            saved_settings=runtime_settings;
+            print("Settings loaded.\n");
+        } else print("Settings load failed.\n");
+        return;
+    }
     print("MyOS Settings\n");
     print("-------------\n");
     print("username = "); print(username); putc('\n');
     print("hostname = "); print(hostname); putc('\n');
     print("theme    = "); print(current_theme); putc('\n');
-    print("\nUse: set username=NAME\n");
-    print("     set hostname=NAME\n");
-    print("     theme matrix|ice|amber|mono\n");
+    print("mouse    = "); print_uint(mouse_get_sensitivity()); print("%\n");
+    gui_preferences_t prefs; gui_get_preferences(&prefs);
+    print("notify   = "); print(prefs.notifications_enabled ? "on" : "off"); putc('\n');
+    print("animate  = "); print(prefs.animations_enabled ? "on" : "off"); putc('\n');
+    print("clock    = "); print(prefs.clock_24h ? "24h" : "12h"); putc('\n');
+    print("storage  = "); print(settings_persistent() ? "ATA" : "session"); putc('\n');
+    print("storage LBA = "); print_uint(settings_lba()); putc('\n');
+    print("\nUse: settings save | settings load\n");
+    print("     disk init-settings LBA\n");
+}
+
+static void cmd_disk(const char* arg) {
+    while (*arg==' ') ++arg;
+    if (!*arg) {
+        print("ATA: "); print(ata_available() ? "ready" : "unavailable"); putc('\n');
+        print("Sectors: "); print_uint(ata_sector_count()); putc('\n');
+        print("Settings: "); print(settings_persistent() ? "enabled" : "disabled"); putc('\n');
+        return;
+    }
+    if (starts_with(arg,"init-settings ")) {
+        const char* p=arg+14;
+        uint32_t lba=0; int found=0;
+        while(*p>='0'&&*p<='9'){lba=lba*10u+(uint32_t)(*p-'0');found=1;++p;}
+        if(found && !*p && settings_format(lba)){
+            print("MyOS settings storage initialized.\n");
+            settings_save_runtime();
+        } else print("Unable to initialize settings storage.\n");
+        return;
+    }
+    print("Usage: disk | disk init-settings LBA\n");
 }
 
 static void cmd_set(const char* arg) {
@@ -2303,7 +2398,14 @@ static void execute(const char* cmd) {
     else if (starts_with(cmd, "write ")) {
         const char* arg; command_arg_after(cmd, 6, &arg); cmd_write_file(arg);
     }
-    else if (streq(cmd, "settings")) cmd_settings();
+    else if (streq(cmd, "settings")) cmd_settings("");
+    else if (starts_with(cmd, "settings ")) {
+        const char* arg; command_arg_after(cmd,9,&arg); cmd_settings(arg);
+    }
+    else if (streq(cmd, "disk")) cmd_disk("");
+    else if (starts_with(cmd, "disk ")) {
+        const char* arg; command_arg_after(cmd,5,&arg); cmd_disk(arg);
+    }
     else if (starts_with(cmd, "set ")) {
         const char* arg;
         command_arg_after(cmd, 4, &arg);
@@ -2642,6 +2744,10 @@ void kernel_main(uint32_t magic, void* mb_info) {
     filesystem_gui_update();
     net_init();
     network_gui_update();
+    ata_init();
+    settings_init();
+    if (settings_load(&runtime_settings)) settings_apply_loaded(&runtime_settings);
+    saved_settings = runtime_settings;
     debug_write("MYOS_READY\n");
     if (net_available()) debug_write("MYOS_NET_READY\n");
     else debug_write("MYOS_NET_UNAVAILABLE\n");
@@ -2825,6 +2931,9 @@ void kernel_main(uint32_t magic, void* mb_info) {
                 scheduler_gui_update();
                 filesystem_gui_update();
                 network_gui_update();
+                settings_snapshot(&runtime_settings);
+                if (settings_persistent() && !settings_equal(&runtime_settings,&saved_settings))
+                    settings_save_runtime();
             }
 
             gui_action_t action;
@@ -2872,6 +2981,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     gui_set_theme(current_theme);
                     log_event("Theme changed from GUI");
                     notify_add("Theme changed");
+                    settings_save_runtime();
                 }
             }
             gui_present();
