@@ -25,5 +25,6 @@ int net_ping_ipv4(uint32_t destination);
 void net_get_status(net_status_t* out);
 int net_udp_send(uint32_t destination, uint16_t source_port, uint16_t destination_port,
                  const uint8_t* payload, uint16_t length);
+int net_tcp_connect(uint32_t destination, uint16_t destination_port);
 
 #endif
