@@ -1176,6 +1176,22 @@ static void cmd_fsinfo(void) {
     print(" bytes\n");
 }
 
+static void network_gui_update(void) {
+    net_status_t status;
+    gui_net_info_t snapshot;
+    net_get_status(&status);
+    snapshot.available = status.available;
+    snapshot.link_up = status.link_up;
+    for (int i = 0; i < 6; ++i) snapshot.mac[i] = status.mac[i];
+    snapshot.ip = status.ip;
+    snapshot.gateway = status.gateway;
+    snapshot.tx_packets = status.tx_packets;
+    snapshot.rx_packets = status.rx_packets;
+    snapshot.ping_success = status.ping_success;
+    snapshot.ping_fail = status.ping_fail;
+    gui_network_set_status(&snapshot);
+}
+
 static void filesystem_gui_update(void) {
     fs_entry_t entries[16];
     gui_file_info_t snapshot[16];
@@ -1705,40 +1721,67 @@ static int pci_find_network(uint16_t* vendor, uint16_t* device) {
     return 0;
 }
 
+static void print_ipv4_value(uint32_t ip) {
+    print_uint((ip >> 24) & 0xFFu);
+    putc('.');
+    print_uint((ip >> 16) & 0xFFu);
+    putc('.');
+    print_uint((ip >> 8) & 0xFFu);
+    putc('.');
+    print_uint(ip & 0xFFu);
+}
+
 static void cmd_net(void) {
+    net_status_t status;
     uint16_t vendor = 0, device = 0;
+    net_get_status(&status);
 
     print("MyOS Network Status\n");
     print("-------------------\n");
-    if (pci_find_network(&vendor, &device)) {
-        print("NIC:        detected\n");
-        print("Vendor ID:  0x");
+    print("Driver:     ");
+    print(status.available ? "RTL8139" : "unavailable");
+    putc('\n');
+    print("Link:       ");
+    print(status.link_up ? "up" : "down");
+    putc('\n');
+    print("MAC:        ");
+    for (int i = 0; i < 6; ++i) {
+        if (i) putc(':');
+        print_hex8(status.mac[i]);
+    }
+    putc('\n');
+    print("IP:         "); print_ipv4_value(status.ip); putc('\n');
+    print("Gateway:    "); print_ipv4_value(status.gateway); putc('\n');
+    print("TX packets: "); print_uint(status.tx_packets); putc('\n');
+    print("RX packets: "); print_uint(status.rx_packets); putc('\n');
+    print("Ping ok:    "); print_uint(status.ping_success); putc('\n');
+    print("Ping fail:  "); print_uint(status.ping_fail); putc('\n');
+
+    if (!status.available && pci_find_network(&vendor, &device)) {
+        print("PCI NIC:    detected (unsupported driver) 0x");
         print_hex16(vendor);
-        putc('\n');
-        print("Device ID:  0x");
+        putc(':');
         print_hex16(device);
         putc('\n');
-        print("Link:       not queried (driver pending)\n");
-    } else {
-        print("NIC:        not detected via PCI\n");
     }
-
-    print("IP:         0.0.0.0\n");
-    print("DHCP:       not configured\n");
-    print("TCP/IP:     kernel stack not loaded\n");
-    print("Ping:       driver/stack required\n");
 }
 
 static void cmd_ping(const char* host) {
     if (!*host) {
-        print("Usage: ping HOST\n");
+        print("Usage: ping IPv4\n");
         return;
     }
-
-    print("ping ");
+    uint32_t ip = 0;
+    if (!net_parse_ipv4(host, &ip)) {
+        print("Invalid IPv4 address.\n");
+        return;
+    }
+    print("PING ");
     print(host);
-    print(": network driver and TCP/IP stack are not enabled yet.\n");
-    print("NIC discovery is available with: net\n");
+    print(": ");
+    if (net_ping_ipv4(ip)) print("reply received.");
+    else print("request timed out.");
+    putc('\n');
 }
 
 /* ---------- help ---------- */
@@ -2522,6 +2565,8 @@ void kernel_main(uint32_t magic, void* mb_info) {
     scheduler_init();
     fs_init();
     filesystem_gui_update();
+    net_init();
+    network_gui_update();
     cpu_sti();
 
     prompt();
@@ -2683,6 +2728,7 @@ void kernel_main(uint32_t magic, void* mb_info) {
             if ((timer_ticks % 25u) == 0u) {
                 scheduler_gui_update();
                 filesystem_gui_update();
+                network_gui_update();
             }
 
             gui_action_t action;
@@ -2706,6 +2752,16 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     log_event("Folder created from GUI");
                 } else if (action.type == GUI_ACTION_FILE_OPEN) {
                     fs_open_index(action.arg);
+                } else if (action.type == GUI_ACTION_NET_PING) {
+                    net_status_t status;
+                    net_get_status(&status);
+                    if (status.available) {
+                        if (net_ping_ipv4(status.gateway)) notify_add("Network ping succeeded");
+                        else notify_add("Network ping failed");
+                    } else {
+                        notify_add("Network driver unavailable");
+                    }
+                    network_gui_update();
                 } else if (action.type == GUI_ACTION_THEME) {
                     static const char* gui_theme_names[] = { "matrix", "ice", "amber", "mono", "light" };
                     int next_theme = 0;

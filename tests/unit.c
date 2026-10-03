@@ -1,4 +1,5 @@
 #include "../src/graphics/font.h"
+#include "../src/net/net.h"
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -178,6 +179,17 @@ static void test_line_editor(void) {
     check(row == 24 && col == 5);
 }
 
+static void test_network_helpers(void) {
+    uint32_t ip = 0;
+    check(net_parse_ipv4("10.0.2.2", &ip));
+    check(ip == 0x0A000202u);
+    check(net_parse_ipv4("255.255.255.255", &ip));
+    check(ip == 0xFFFFFFFFu);
+    check(!net_parse_ipv4("256.1.1.1", &ip));
+    check(!net_parse_ipv4("10.0.2", &ip));
+    check(!net_parse_ipv4("10.0.2.2x", &ip));
+}
+
 static void test_font_presence(void) {
     const uint8_t* a = font8x14_get('A');
     const uint8_t* z = font8x14_get('Z');
@@ -197,6 +209,7 @@ int test_main(void) {
     test_acpi_s5_parser();
     test_line_editor();
     test_framebuffer_gui();
+    test_network_helpers();
     test_font_presence();
     return failures;
 }
