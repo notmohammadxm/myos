@@ -103,6 +103,8 @@ static int file_count;
 static int network_open;
 static gui_net_info_t network_status;
 static int quick_settings_open;
+static int panic_open;
+static int panic_code;
 static int notification_open = 1;
 static int notifications_enabled = 1;
 static int notifications_cleared;
@@ -743,6 +745,45 @@ static void make_clock_text(char out[9]) {
     out[0]=(char)('0'+clock_hour/10); out[1]=(char)('0'+clock_hour%10); out[2]=':';
     out[3]=(char)('0'+clock_minute/10); out[4]=(char)('0'+clock_minute%10); out[5]=':';
     out[6]=(char)('0'+clock_second/10); out[7]=(char)('0'+clock_second%10); out[8]=0;
+}
+
+static void draw_panic_screen(void) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    int w = (int)f->width;
+    int h = (int)f->height;
+    uint32_t panic_bg = framebuffer_make_color(9, 10, 13);
+    uint32_t panic_red = framebuffer_make_color(244, 74, 92);
+    uint32_t panic_text = framebuffer_make_color(240, 242, 247);
+    uint32_t panic_muted = framebuffer_make_color(145, 151, 162);
+
+    renderer_rect(0, 0, w, h, panic_bg);
+    draw_round_card(42, 42, w - 84, h - 84, 26, panic_bg, panic_red);
+    draw_round_rect(72, 80, 14, h - 160, 7, panic_red);
+    draw_text(112, 86, "MYOS KERNEL PANIC", panic_red);
+    draw_text(112, 118, "THE SYSTEM WAS STOPPED TO PROTECT STATE", panic_text);
+    draw_text(112, 166, "EXCEPTION CODE", panic_muted);
+    draw_uint_text(112, 194, (uint32_t)panic_code, panic_red);
+    draw_text(112, 246, "NO FURTHER INPUT WILL BE PROCESSED", panic_muted);
+    draw_text(112, 278, "REBOOT THE MACHINE AFTER CHECKING", panic_muted);
+    draw_round_card(112, h - 132, 260, 42, 12, panic_red, panic_red);
+    draw_text_centered(112, h - 121, 260, "SYSTEM HALTED", panic_bg);
+}
+
+void gui_panic(int code) {
+    if (!ready) return;
+    panic_open = 1;
+    panic_code = code;
+    launcher_open = 0;
+    quick_settings_open = 0;
+    notification_open = 0;
+    power_open = 0;
+    taskmgr_open = 0;
+    filemgr_open = 0;
+    network_open = 0;
+    focused_window = -1;
+    gui_request_redraw();
+    gui_present();
 }
 
 static void draw_desktop_chrome(void) {
@@ -1971,6 +2012,8 @@ void gui_init(void) {
     filemgr_selected = 0;
     file_count = 0;
     network_open = 0;
+    panic_open = 0;
+    panic_code = 0;
     network_status.available = 0;
     network_status.link_up = 0;
     network_status.ip = 0;
@@ -2151,6 +2194,10 @@ static void gui_request_terminal_redraw(void) {
 }
 
 void gui_redraw(void) {
+    if (panic_open) {
+        draw_panic_screen();
+        return;
+    }
     if (!ready) return;
     dirty = 0;
     draw_desktop_chrome();
