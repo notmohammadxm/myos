@@ -1376,7 +1376,8 @@ static void draw_task_manager(void) {
     if (!f) return;
     int width = 720, height = 430;
     if ((int)f->width < width + 24) width = (int)f->width - 24;
-    if ((int)f->height < height + TOPBAR_H + FOOTER_H) height = (int)f->height - TOPBAR_H - FOOTER_H - 24;
+    if ((int)f->height < height + TOPBAR_H + FOOTER_H) height = (int)f->height - FOOTER_H - TOPBAR_H - 24;
+    if (height < 320) height = 320;
     int x = ((int)f->width - width) / 2;
     int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
 
@@ -1389,28 +1390,28 @@ static void draw_task_manager(void) {
     int cols[6] = { 24, 72, 286, 490, 566, 640 };
     for (int i = 0; i < 6; ++i) draw_text(x + cols[i], y + 72, headers[i], muted);
     draw_soft_divider(x + 20, y + 94, width - 40, border);
-
-    for (int row = 0; row < task_count && row < 8; ++row) {
+    int rows = (height - 170) / 34;
+    if (rows > 8) rows = 8;
+    for (int row = 0; row < rows && row < task_count; ++row) {
         int oi = task_order[row];
         if (oi < 0 || oi >= task_count) continue;
         int yy = y + 102 + row * 34;
         int active = row == taskmgr_selected;
         draw_round_card(x + 18, yy - 2, width - 36, 30, 9, active ? panel : bg, active ? accent : border);
-        draw_text(x + cols[0], yy + 5, "00", active ? text : muted);
-        int pid = task_data[oi].pid;
-        draw_text(x + cols[0], yy + 5, pid < 10 ? (pid == 0 ? "00" : pid == 1 ? "01" : "02") : "??",
-                  active ? text : muted);
-        draw_text_clipped(x + cols[1], yy + 5, task_data[oi].name, active ? text : muted, 200);
-        draw_text(x + cols[2], yy + 5, task_data[oi].state, active ? text : muted);
-        draw_text(x + cols[3], yy + 5, task_data[oi].cpu_percent > 99 ? "99%" :
-                  task_data[oi].cpu_percent > 9 ? (task_data[oi].cpu_percent == 10 ? "10%" : "??") : "0%", success);
-        draw_text(x + cols[4], yy + 5, task_data[oi].memory_kib > 99 ? "999K" :
-                  task_data[oi].memory_kib > 9 ? "64K" : "8K", text);
-        draw_text(x + cols[5], yy + 5, task_data[oi].priority > 9 ? "9" :
-                  task_data[oi].priority == 0 ? "0" : "1", warning);
+        draw_uint_text(x + cols[0], yy + 5, (uint32_t)task_data[oi].pid, active ? text : muted);
+        draw_text_clipped(x + cols[1], yy + 5, task_data[oi].name, active ? text : muted, 196);
+        draw_text_clipped(x + cols[2], yy + 5, task_data[oi].state, active ? text : muted, 174);
+        draw_uint_text(x + cols[3], yy + 5, (uint32_t)task_data[oi].cpu_percent, success);
+        draw_text(x + cols[3] + 24, yy + 5, "%", success);
+        draw_uint_text(x + cols[4], yy + 5, (uint32_t)task_data[oi].memory_kib, text);
+        draw_text(x + cols[4] + 32, yy + 5, "K", text);
+        draw_uint_text(x + cols[5], yy + 5, (uint32_t)task_data[oi].priority, warning);
     }
-
-    draw_text(x + 20, y + height - 48, "UP/DOWN SELECT   C CPU   M MEMORY   N NAME   X TERMINATE   R RESTART   ESC CLOSE", muted);
+    draw_round_card(x + 18, y + height - 78, 106, 30, 10, bg, border);
+    draw_round_card(x + 132, y + height - 78, 106, 30, 10, bg, border);
+    draw_text_centered(x + 18, y + height - 71, 106, "TERMINATE", danger);
+    draw_text_centered(x + 132, y + height - 71, 106, "RESTART", success);
+    draw_text(x + 258, y + height - 71, "C CPU  M MEMORY  N PID  ESC CLOSE", muted);
 }
 
 static void taskmgr_sort_data(void) {
@@ -1685,6 +1686,42 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     (void)shift;
     if (!ready) return 0;
 
+    if (taskmgr_open) {
+        if (event == GUI_KEY_ESCAPE) {
+            gui_taskmgr_close();
+            return 1;
+        }
+        if (event == GUI_KEY_UP) {
+            if (task_count > 0) taskmgr_selected = (taskmgr_selected + task_count - 1) % task_count;
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == GUI_KEY_DOWN) {
+            if (task_count > 0) taskmgr_selected = (taskmgr_selected + 1) % task_count;
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == 'c') taskmgr_sort_mode = 1;
+        else if (event == 'm') taskmgr_sort_mode = 2;
+        else if (event == 'n') taskmgr_sort_mode = 0;
+        else if (event == 'x') {
+            if (taskmgr_selected < task_count) {
+                int idx = task_order[taskmgr_selected];
+                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_TERMINATE, task_data[idx].pid);
+            }
+        } else if (event == 'r') {
+            if (taskmgr_selected < task_count) {
+                int idx = task_order[taskmgr_selected];
+                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_RESTART, task_data[idx].pid);
+            }
+        } else {
+            return 1;
+        }
+        taskmgr_sort_data();
+        gui_request_redraw();
+        return 1;
+    }
+
     if (launcher_open) {
         int matches = launcher_match_count();
         if (event == GUI_KEY_ESCAPE) {
@@ -1734,8 +1771,7 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     if (quick_settings_open) {
         if (event == GUI_KEY_ESCAPE) {
             quick_settings_open = 0;
-            gui_request_redraw_rect(0, TOPBAR_H, (int)framebuffer_info()->width,
-                                    QUICK_H + 18);
+            gui_request_redraw_rect(0, TOPBAR_H, (int)framebuffer_info()->width, QUICK_H + 18);
             return 1;
         }
         if (event == '1' || event == '2' || event == '3') {
@@ -2245,7 +2281,22 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     uint8_t released = (uint8_t)((new_buttons ^ mouse_prev_buttons) & mouse_prev_buttons);
 
     if (pressed & 1u) {
-        if (launcher_open) {
+        if (taskmgr_open) {
+            int row = taskmgr_pointer_row();
+            int button = taskmgr_pointer_button();
+            if (row >= 0) {
+                taskmgr_selected = row;
+                gui_request_redraw();
+            } else if (button == 1 && taskmgr_selected < task_count) {
+                int idx = task_order[taskmgr_selected];
+                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_TERMINATE, task_data[idx].pid);
+                gui_request_redraw();
+            } else if (button == 2 && taskmgr_selected < task_count) {
+                int idx = task_order[taskmgr_selected];
+                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_RESTART, task_data[idx].pid);
+                gui_request_redraw();
+            }
+        } else if (launcher_open) {
             int launcher_item = -1;
             if (point_in_launcher_item(&launcher_item)) {
                 open_window(launcher_item);
