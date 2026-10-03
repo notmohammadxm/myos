@@ -1430,6 +1430,7 @@ static void cmd_set(const char* arg) {
         log_event("Username changed");
         notify_add("Username changed");
         print("Username updated.\n");
+        settings_save_runtime();
         return;
     }
 
@@ -1443,13 +1444,74 @@ static void cmd_set(const char* arg) {
         log_event("Hostname changed");
         notify_add("Hostname changed");
         print("Hostname updated.\n");
+        settings_save_runtime();
         return;
     }
 
-    print("Usage: set username=NAME\n");
-    print("       set hostname=NAME\n");
-}
+    if (starts_with(arg, "mouse=")) {
+        const char* value = arg + 6;
+        uint32_t n = 0; int found = 0;
+        while (*value >= '0' && *value <= '9') {
+            n = n * 10u + (uint32_t)(*value - '0');
+            found = 1; ++value;
+        }
+        if (found && !*value && n >= 25u && n <= 200u) {
+            mouse_set_sensitivity((uint8_t)n);
+            print("Mouse sensitivity updated.\n");
+            settings_save_runtime();
+        } else print("Mouse sensitivity must be 25..200.\n");
+        return;
+    }
 
+    if (starts_with(arg, "clock=")) {
+        const char* value = arg + 6;
+        gui_preferences_t prefs;
+        gui_get_preferences(&prefs);
+        if (streq(value, "12h")) prefs.clock_24h = 0;
+        else if (streq(value, "24h")) prefs.clock_24h = 1;
+        else {
+            print("Clock format must be 12h or 24h.\n");
+            return;
+        }
+        gui_set_preferences(&prefs);
+        print("Clock format updated.\n");
+        settings_save_runtime();
+        return;
+    }
+
+    if (starts_with(arg, "notifications=")) {
+        const char* value = arg + 14;
+        gui_preferences_t prefs;
+        gui_get_preferences(&prefs);
+        if (streq(value, "on")) prefs.notifications_enabled = 1;
+        else if (streq(value, "off")) prefs.notifications_enabled = 0;
+        else {
+            print("Notifications must be on or off.\n");
+            return;
+        }
+        gui_set_preferences(&prefs);
+        settings_save_runtime();
+        return;
+    }
+
+    if (starts_with(arg, "animations=")) {
+        const char* value = arg + 11;
+        gui_preferences_t prefs;
+        gui_get_preferences(&prefs);
+        if (streq(value, "on")) prefs.animations_enabled = 1;
+        else if (streq(value, "off")) prefs.animations_enabled = 0;
+        else {
+            print("Animations must be on or off.\n");
+            return;
+        }
+        gui_set_preferences(&prefs);
+        settings_save_runtime();
+        return;
+    }
+
+    print("Usage: set username=NAME | hostname=NAME | mouse=25..200\n");
+    print("       set clock=12h|24h | notifications=on|off | animations=on|off\n");
+}
 static void prompt(void) {
     print_color(username, 0x0A);
     print("> ");
@@ -1690,7 +1752,7 @@ static const char* command_names[] = {
     "history","profile","whoami","hostname","sysinfo","mem",
     "time","clock","date","calendar","taskmgr","hardware","settings","set",
     "notify","notifications","logs","net","ping","uptime",
-    "ls","cat","touch","mkdir","rm","mv","write","fsinfo",
+    "ls","cat","touch","mkdir","rm","mv","write","fsinfo","disk",
     "reboot","shutdown"
 };
 
