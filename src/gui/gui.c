@@ -90,12 +90,6 @@ static int launcher_selected;
 static int launcher_query_len;
 static char launcher_query[32];
 static int recent_apps[7] = { 0, 1, 2, 3, 4, 5, 6 };
-static int quick_settings_open;
-static int notification_open = 1;
-static int notifications_enabled = 1;
-static int notifications_cleared;
-static int animations_enabled = 1;
-static int power_open;
 static int taskmgr_open;
 static int taskmgr_selected;
 static int taskmgr_sort_mode;
@@ -106,6 +100,12 @@ static int filemgr_open;
 static int filemgr_selected;
 static gui_file_info_t file_data[16];
 static int file_count;
+static int quick_settings_open;
+static int notification_open = 1;
+static int notifications_enabled = 1;
+static int notifications_cleared;
+static int animations_enabled = 1;
+static int power_open;
 static char calc_display[32] = "0";
 static int calc_has_value;
 static int calc_replace_next;
@@ -128,6 +128,7 @@ static void gui_request_terminal_redraw(void);
 static void launcher_reset_search(void);
 static void open_launcher_app(int index);
 static void launcher_record_recent(int index);
+static void open_window(int index);
 static struct gui_window windows[WINDOW_COUNT];
 
 static int min_int(int a, int b) { return a < b ? a : b; }
@@ -529,7 +530,8 @@ static void draw_uint_text(int x, int y, uint32_t value, uint32_t color) {
         digits[n++] = (char)('0' + (value % 10u));
         value /= 10u;
     }
-    for (int i = 0; i < n; ++i) draw_char(x + i * FONT_W, y, digits[n - i - 1], color);
+    for (int i = 0; i < n; ++i)
+        draw_char(x + i * FONT_W, y, digits[n - i - 1], color);
 }
 
 static void draw_soft_divider(int x, int y, int width, uint32_t color) {
@@ -870,7 +872,7 @@ static int launcher_match_count(void) {
     int count = 0;
     for (int pos = 0; pos < 7; ++pos) {
         int index = recent_apps[pos];
-        if (index < 0 || index >= 6) continue;
+        if (index < 0 || index >= 7) continue;
         if (launcher_contains(names[index], launcher_query) ||
             launcher_contains(desc[index], launcher_query)) {
             ++count;
@@ -902,26 +904,36 @@ static int launcher_match_at(int ordinal) {
     return -1;
 }
 
+static void launcher_reset_search(void) {
+    launcher_query[0] = 0;
+    launcher_query_len = 0;
+    launcher_selected = 0;
+}
+
+static void launcher_record_recent(int index) {
+    if (index < 0 || index >= 7) return;
+    int pos = 0;
+    while (pos < 7 && recent_apps[pos] != index) ++pos;
+    if (pos >= 7) pos = 6;
+    while (pos > 0) {
+        recent_apps[pos] = recent_apps[pos - 1];
+        --pos;
+    }
+    recent_apps[0] = index;
+}
+
 static void open_launcher_app(int index) {
     launcher_record_recent(index);
     if (index == 5) {
         gui_taskmgr_open();
-        launcher_open = 0;
-        launcher_reset_search();
-        gui_request_redraw();
         return;
     }
     if (index == 6) {
         gui_filemgr_open();
-        launcher_open = 0;
-        launcher_reset_search();
-        gui_request_redraw();
         return;
     }
     if (index >= 0 && index < WINDOW_COUNT) open_window(index);
 }
-
-
 
 static void launcher_toggle(void) {
     launcher_open = !launcher_open;
@@ -929,6 +941,7 @@ static void launcher_toggle(void) {
     quick_settings_open = 0;
     power_open = 0;
     taskmgr_open = 0;
+    filemgr_open = 0;
     gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
 }
 
@@ -941,10 +954,8 @@ static void draw_launcher(void) {
 
     draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
     draw_round_card(x, y, width, height, 20, panel2, accent);
-
     draw_text(x + 24, y + 18, "MYOS", accent);
     draw_text(x + 24, y + 38, launcher_query_len ? "SEARCH RESULTS" : "RECENT APPLICATIONS", muted);
-
     draw_round_card(x + 18, y + 64, width - 36, 38, 11, bg, border);
     draw_round_rect(x + 31, y + 76, 12, 12, 4, accent);
     draw_text(x + 53, y + 73, launcher_query_len ? launcher_query : "SEARCH APPLICATIONS",
@@ -962,8 +973,7 @@ static void draw_launcher(void) {
             int index = launcher_match_at(ordinal);
             int iy = y + 112 + ordinal * 40;
             int active = ordinal == launcher_selected;
-            draw_round_card(x + 18, iy, width - 36, 34, 10,
-                            active ? panel : bg, active ? accent : border);
+            draw_round_card(x + 18, iy, width - 36, 34, 10, active ? panel : bg, active ? accent : border);
             if (index == 0) draw_icon_terminal(x + 30, iy + 7, active ? accent : muted);
             else if (index == 1) draw_icon_system(x + 30, iy + 7, active ? accent : muted);
             else if (index == 2) draw_icon_settings(x + 30, iy + 7, active ? accent : muted);
@@ -974,8 +984,67 @@ static void draw_launcher(void) {
             draw_text_clipped(x + 64, iy + 5, names[index], active ? text : muted, width - 92);
         }
     }
-
     draw_text(x + 20, y + height - 22, "UP/DOWN SELECT   ENTER OPEN   ESC CLOSE", muted);
+}
+
+static void draw_terminal_surface(const struct gui_window* w) {
+    if (!w->visible || w->minimized) return;
+    int inner_x = w->x + TERM_PAD;
+    int inner_y = w->y + TITLE_H + 10;
+    int inner_w = w->w - TERM_PAD * 2;
+    int inner_h = w->h - TITLE_H - 20;
+    term_view_rows = max_int(1, inner_h / FONT_H);
+    int cols = max_int(1, inner_w / FONT_W);
+    if (cols > TERM_COLS) cols = TERM_COLS;
+    if (term_view_top < 0) term_view_top = 0;
+    if (term_view_top > TERM_ROWS - term_view_rows) term_view_top = max_int(0, TERM_ROWS - term_view_rows);
+
+    renderer_rect(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, terminal_bg);
+    for (int r = 0; r < term_view_rows; ++r) {
+        int source_row = term_view_top + r;
+        if (source_row < 0 || source_row >= TERM_ROWS) continue;
+        for (int c = 0; c < cols; ++c) {
+            char ch = term[source_row][c];
+            int selected = 0;
+            if (source_row == input_y && selection_anchor >= 0 && selection_anchor != selection_cursor) {
+                int a = selection_anchor, b = selection_cursor;
+                if (a > b) { int t = a; a = b; b = t; }
+                selected = c >= input_x + a && c < input_x + b;
+            }
+            if (selected) renderer_rect(inner_x + c * FONT_W, inner_y + r * FONT_H, FONT_W, FONT_H, accent);
+            if (ch == ' ') continue;
+            draw_char(inner_x + c * FONT_W, inner_y + r * FONT_H, ch, selected ? terminal_bg : attr_color(term_attr[source_row][c]));
+        }
+    }
+
+    if (focused_window == 0 && input_active) {
+        int view_y = ty - term_view_top;
+        int cx = inner_x + tx * FONT_W;
+        int cy = inner_y + view_y * FONT_H;
+        if (view_y >= 0 && view_y < term_view_rows)
+            renderer_rect(cx, cy + FONT_H - 2, FONT_W - 1, 2, accent);
+    }
+}
+
+static void terminal_follow_bottom(void) {
+    if (term_view_rows <= 0) return;
+    if (ty >= term_view_rows) term_view_top = ty - term_view_rows + 1;
+    else term_view_top = 0;
+}
+
+static void terminal_scroll_buffer(void) {
+    for (int r = 1; r < TERM_ROWS; ++r)
+        for (int c = 0; c < TERM_COLS; ++c) {
+            term[r - 1][c] = term[r][c];
+            term_attr[r - 1][c] = term_attr[r][c];
+        }
+    for (int c = 0; c < TERM_COLS; ++c) {
+        term[TERM_ROWS - 1][c] = ' ';
+        term_attr[TERM_ROWS - 1][c] = 0x0A;
+    }
+    ty = TERM_ROWS - 1;
+    input_y = max_int(0, input_y - 1);
+    term_view_top = max_int(0, term_view_top - 1);
 }
 
 static int calc_is_space(char c) { return c == ' ' || c == '\t'; }
@@ -1274,79 +1343,78 @@ static void draw_task_manager(void) {
     if (!f) return;
     int width = 720, height = 430;
     if ((int)f->width < width + 24) width = (int)f->width - 24;
-    if ((int)f->height < height + TOPBAR_H + FOOTER_H) height = (int)f->height - FOOTER_H - TOPBAR_H - 24;
+    if ((int)f->height < height + TOPBAR_H + FOOTER_H)
+        height = (int)f->height - TOPBAR_H - FOOTER_H - 24;
     if (height < 320) height = 320;
     int x = ((int)f->width - width) / 2;
     int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
-
     draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
     draw_round_card(x, y, width, height, 20, panel2, accent);
     draw_text(x + 22, y + 18, "TASK MANAGER", accent);
     draw_text(x + 22, y + 40, "ROUND ROBIN KERNEL TASKS", muted);
-
     const char* headers[6] = { "PID", "NAME", "STATE", "CPU", "MEM", "PRIO" };
     int cols[6] = { 24, 72, 286, 490, 566, 640 };
-    for (int i = 0; i < 6; ++i) draw_text(x + cols[i], y + 72, headers[i], muted);
-    draw_soft_divider(x + 20, y + 94, width - 40, border);
-    int rows = (height - 170) / 34;
-    if (rows > 8) rows = 8;
-    for (int row = 0; row < rows && row < task_count; ++row) {
-        int oi = task_order[row];
-        if (oi < 0 || oi >= task_count) continue;
-        int yy = y + 102 + row * 34;
-        int active = row == taskmgr_selected;
-        draw_round_card(x + 18, yy - 2, width - 36, 30, 9, active ? panel : bg, active ? accent : border);
-        draw_uint_text(x + cols[0], yy + 5, (uint32_t)task_data[oi].pid, active ? text : muted);
-        draw_text_clipped(x + cols[1], yy + 5, task_data[oi].name, active ? text : muted, 196);
-        draw_text_clipped(x + cols[2], yy + 5, task_data[oi].state, active ? text : muted, 174);
-        draw_uint_text(x + cols[3], yy + 5, (uint32_t)task_data[oi].cpu_percent, success);
-        draw_text(x + cols[3] + 24, yy + 5, "%", success);
-        draw_uint_text(x + cols[4], yy + 5, (uint32_t)task_data[oi].memory_kib, text);
-        draw_text(x + cols[4] + 32, yy + 5, "K", text);
-        draw_uint_text(x + cols[5], yy + 5, (uint32_t)task_data[oi].priority, warning);
+    for (int i=0;i<6;++i) draw_text(x+cols[i],y+72,headers[i],muted);
+    draw_soft_divider(x+20,y+94,width-40,border);
+    int rows=(height-170)/34; if(rows>8)rows=8;
+    for(int row=0;row<rows && row<task_count;++row){
+        int oi=task_order[row]; if(oi<0||oi>=task_count)continue;
+        int yy=y+102+row*34; int active=row==taskmgr_selected;
+        draw_round_card(x+18,yy-2,width-36,30,9,active?panel:bg,active?accent:border);
+        draw_uint_text(x+cols[0],yy+5,(uint32_t)task_data[oi].pid,active?text:muted);
+        draw_text_clipped(x+cols[1],yy+5,task_data[oi].name,active?text:muted,196);
+        draw_text_clipped(x+cols[2],yy+5,task_data[oi].state,active?text:muted,174);
+        draw_uint_text(x+cols[3],yy+5,(uint32_t)task_data[oi].cpu_percent,success);
+        draw_text(x+cols[3]+24,yy+5,"%",success);
+        draw_uint_text(x+cols[4],yy+5,(uint32_t)task_data[oi].memory_kib,text);
+        draw_text(x+cols[4]+32,yy+5,"K",text);
+        draw_uint_text(x+cols[5],yy+5,(uint32_t)task_data[oi].priority,warning);
     }
-    draw_round_card(x + 18, y + height - 78, 106, 30, 10, bg, border);
-    draw_round_card(x + 132, y + height - 78, 106, 30, 10, bg, border);
-    draw_text_centered(x + 18, y + height - 71, 106, "TERMINATE", danger);
-    draw_text_centered(x + 132, y + height - 71, 106, "RESTART", success);
-    draw_text(x + 258, y + height - 71, "C CPU  M MEMORY  N PID  ESC CLOSE", muted);
+    draw_round_card(x+18,y+height-78,106,30,10,bg,border);
+    draw_round_card(x+132,y+height-78,106,30,10,bg,border);
+    draw_text_centered(x+18,y+height-71,106,"TERMINATE",danger);
+    draw_text_centered(x+132,y+height-71,106,"RESTART",success);
+    draw_text(x+258,y+height-71,"C CPU  M MEMORY  N PID  ESC CLOSE",muted);
 }
 
 static void taskmgr_sort_data(void) {
-    for(int i=0;i<task_count;++i) task_order[i]=i;
-    for(int i=0;i<task_count;++i) for(int j=i+1;j<task_count;++j) {
-        int a=task_order[i], b=task_order[j], swap=0;
-        if(taskmgr_sort_mode==1) swap=task_data[b].cpu_percent>task_data[a].cpu_percent;
-        else if(taskmgr_sort_mode==2) swap=task_data[b].memory_kib>task_data[a].memory_kib;
-        else if(taskmgr_sort_mode==3) swap=task_data[b].priority>task_data[a].priority;
+    for(int i=0;i<task_count;++i)task_order[i]=i;
+    for(int i=0;i<task_count;++i)for(int j=i+1;j<task_count;++j){
+        int a=task_order[i],b=task_order[j],swap=0;
+        if(taskmgr_sort_mode==1)swap=task_data[b].cpu_percent>task_data[a].cpu_percent;
+        else if(taskmgr_sort_mode==2)swap=task_data[b].memory_kib>task_data[a].memory_kib;
+        else if(taskmgr_sort_mode==3)swap=task_data[b].priority>task_data[a].priority;
         else swap=task_data[b].pid<task_data[a].pid;
         if(swap){int t=task_order[i];task_order[i]=task_order[j];task_order[j]=t;}
     }
-    if(taskmgr_selected>=task_count) taskmgr_selected=max_int(0,task_count-1);
+    if(taskmgr_selected>=task_count)taskmgr_selected=max_int(0,task_count-1);
 }
 
 void gui_taskmgr_set_data(const gui_task_info_t* tasks,int count){
-    if(!ready || !tasks) return;
+    if(!ready||!tasks)return;
     task_count=max_int(0,min_int(count,8));
-    for(int i=0;i<task_count;++i) task_data[i]=tasks[i];
+    for(int i=0;i<task_count;++i)task_data[i]=tasks[i];
     taskmgr_sort_data();
-    if (taskmgr_open) gui_request_redraw();
+    if(taskmgr_open)gui_request_redraw();
 }
 
 void gui_taskmgr_open(void){
     if(!ready)return;
     taskmgr_open=1; taskmgr_selected=0; taskmgr_sort_mode=0;
-    launcher_open=0; quick_settings_open=0; notification_open=0; power_open=0; focused_window=-1;
+    launcher_open=0; quick_settings_open=0; notification_open=0; power_open=0; filemgr_open=0;
+    focused_window=-1;
     taskmgr_sort_data(); gui_request_redraw();
 }
 
-static void gui_taskmgr_close(void){taskmgr_open=0; notification_open=0; gui_request_redraw();}
+static void gui_taskmgr_close(void){taskmgr_open=0;notification_open=0;gui_request_redraw();}
 
 static int taskmgr_pointer_row(void){
     const framebuffer_info_t* f=framebuffer_info(); if(!f||!taskmgr_open)return -1;
-    int w=720,h=430; if((int)f->width<w+24)w=(int)f->width-24; if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    int w=720,h=430;
+    if((int)f->width<w+24)w=(int)f->width-24;
+    if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
     if(h<320)h=320;
-    int x=((int)f->width-w)/2, y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
+    int x=((int)f->width-w)/2,y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
     if(mouse_x_pos<x+18||mouse_x_pos>=x+w-18||mouse_y_pos<y+100)return -1;
     int row=(mouse_y_pos-y-100)/34;
     if(row<0||row>=task_count||row>=8||(mouse_y_pos-y-100)%34>=30)return -1;
@@ -1355,9 +1423,11 @@ static int taskmgr_pointer_row(void){
 
 static int taskmgr_pointer_button(void){
     const framebuffer_info_t* f=framebuffer_info(); if(!f||!taskmgr_open)return 0;
-    int w=720,h=430; if((int)f->width<w+24)w=(int)f->width-24; if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    int w=720,h=430;
+    if((int)f->width<w+24)w=(int)f->width-24;
+    if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
     if(h<320)return 0;
-    int x=((int)f->width-w)/2, y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
+    int x=((int)f->width-w)/2,y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
     if(mouse_y_pos<y+h-78||mouse_y_pos>=y+h-48)return 0;
     if(mouse_x_pos>=x+18&&mouse_x_pos<x+124)return 1;
     if(mouse_x_pos>=x+132&&mouse_x_pos<x+238)return 2;
@@ -1365,101 +1435,81 @@ static int taskmgr_pointer_button(void){
 }
 
 static void draw_file_manager(void) {
-    if (!filemgr_open) return;
-    const framebuffer_info_t* f = framebuffer_info();
-    if (!f) return;
-    int width = 760, height = 440;
-    if ((int)f->width < width + 24) width = (int)f->width - 24;
-    if ((int)f->height < height + TOPBAR_H + FOOTER_H) height = (int)f->height - TOPBAR_H - FOOTER_H - 24;
-    if (height < 330) height = 330;
-    int x = ((int)f->width - width) / 2;
-    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
-    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
-    draw_round_card(x, y, width, height, 20, panel2, accent);
-    draw_text(x + 22, y + 18, "FILES", accent);
-    draw_text(x + 22, y + 40, "RAMFS /", muted);
-    draw_round_card(x + 18, y + 62, width - 36, 38, 11, bg, border);
-    draw_text(x + 32, y + 73, "/home", text);
-    draw_text(x + width - 96, y + 73, "ROOT", accent);
-    int rows = (height - 150) / 34;
-    if (rows > 10) rows = 10;
-    for (int row = 0; row < file_count && row < rows; ++row) {
-        int yy = y + 110 + row * 34;
-        int active = row == filemgr_selected;
-        draw_round_card(x + 18, yy - 2, width - 36, 30, 9, active ? panel : bg, active ? accent : border);
-        if (file_data[row].directory) draw_icon_system(x + 30, yy + 6, active ? accent : warning);
-        else draw_icon_terminal(x + 30, yy + 6, active ? accent : muted);
-        draw_text_clipped(x + 64, yy + 5, file_data[row].name, active ? text : muted, 430);
-        if (file_data[row].directory) draw_text(x + width - 112, yy + 5, "DIR", warning);
-        else {
-            draw_uint_text(x + width - 112, yy + 5, file_data[row].size, muted);
-            draw_text(x + width - 72, yy + 5, "B", muted);
-        }
+    if(!filemgr_open)return;
+    const framebuffer_info_t* f=framebuffer_info(); if(!f)return;
+    int width=760,height=440;
+    if((int)f->width<width+24)width=(int)f->width-24;
+    if((int)f->height<height+TOPBAR_H+FOOTER_H)height=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    if(height<330)height=330;
+    int x=((int)f->width-width)/2;
+    int y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-height)/2;
+    draw_round_card(x+7,y+11,width,height,20,bg,border);
+    draw_round_card(x,y,width,height,20,panel2,accent);
+    draw_text(x+22,y+18,"FILES",accent);
+    draw_text(x+22,y+40,"RAMFS /",muted);
+    draw_round_card(x+18,y+62,width-36,38,11,bg,border);
+    draw_text(x+32,y+73,"/home",text);
+    draw_text(x+width-96,y+73,"ROOT",accent);
+    int rows=(height-150)/34; if(rows>10)rows=10;
+    for(int row=0;row<rows&&row<file_count;++row){
+        int yy=y+110+row*34,active=row==filemgr_selected;
+        draw_round_card(x+18,yy-2,width-36,30,9,active?panel:bg,active?accent:border);
+        if(file_data[row].directory)draw_icon_system(x+30,yy+6,active?accent:warning);
+        else draw_icon_terminal(x+30,yy+6,active?accent:muted);
+        draw_text_clipped(x+64,yy+5,file_data[row].name,active?text:muted,430);
+        if(file_data[row].directory)draw_text(x+width-112,yy+5,"DIR",warning);
+        else {draw_uint_text(x+width-112,yy+5,file_data[row].size,muted);draw_text(x+width-72,yy+5,"B",muted);}
     }
-    draw_round_card(x + 18, y + height - 78, 94, 30, 10, bg, border);
-    draw_round_card(x + 120, y + height - 78, 94, 30, 10, bg, border);
-    draw_round_card(x + 222, y + height - 78, 94, 30, 10, bg, border);
-    draw_text_centered(x + 18, y + height - 71, 94, "NEW FILE", success);
-    draw_text_centered(x + 120, y + height - 71, 94, "NEW FOLDER", warning);
-    draw_text_centered(x + 222, y + height - 71, 94, "DELETE", danger);
-    draw_text(x + 336, y + height - 71, "ENTER OPEN   ESC CLOSE", muted);
+    draw_round_card(x+18,y+height-78,94,30,10,bg,border);
+    draw_round_card(x+120,y+height-78,94,30,10,bg,border);
+    draw_round_card(x+222,y+height-78,94,30,10,bg,border);
+    draw_text_centered(x+18,y+height-71,94,"NEW FILE",success);
+    draw_text_centered(x+120,y+height-71,94,"NEW FOLDER",warning);
+    draw_text_centered(x+222,y+height-71,94,"DELETE",danger);
+    draw_text(x+336,y+height-71,"ENTER OPEN   ESC CLOSE",muted);
 }
 
-void gui_filemgr_set_data(const gui_file_info_t* files, int count) {
-    if (!ready || !files) return;
-    file_count = max_int(0, min_int(count, 16));
-    for (int i = 0; i < file_count; ++i) file_data[i] = files[i];
-    if (filemgr_selected >= file_count) filemgr_selected = max_int(0, file_count - 1);
-    if (filemgr_open) gui_request_redraw();
+void gui_filemgr_set_data(const gui_file_info_t* files,int count){
+    if(!ready||!files)return;
+    file_count=max_int(0,min_int(count,16));
+    for(int i=0;i<file_count;++i)file_data[i]=files[i];
+    if(filemgr_selected>=file_count)filemgr_selected=max_int(0,file_count-1);
+    if(filemgr_open)gui_request_redraw();
 }
 
-void gui_filemgr_open(void) {
-    if (!ready) return;
-    filemgr_open = 1;
-    filemgr_selected = 0;
-    launcher_open = 0;
-    quick_settings_open = 0;
-    notification_open = 0;
-    power_open = 0;
-    taskmgr_open = 0;
-    focused_window = -1;
+void gui_filemgr_open(void){
+    if(!ready)return;
+    filemgr_open=1;filemgr_selected=0;
+    launcher_open=0;quick_settings_open=0;notification_open=0;power_open=0;taskmgr_open=0;focused_window=-1;
     gui_request_redraw();
 }
 
-static void gui_filemgr_close(void) {
-    filemgr_open = 0;
-    notification_open = 0;
-    gui_request_redraw();
-}
+static void gui_filemgr_close(void){filemgr_open=0;notification_open=0;gui_request_redraw();}
 
-static int filemgr_pointer_row(void) {
-    const framebuffer_info_t* f = framebuffer_info();
-    if (!f || !filemgr_open) return -1;
-    int w = 760, h = 440;
-    if ((int)f->width < w + 24) w = (int)f->width - 24;
-    if ((int)f->height < h + TOPBAR_H + FOOTER_H) h = (int)f->height - TOPBAR_H - FOOTER_H - 24;
-    if (h < 330) h = 330;
-    int x = ((int)f->width - w) / 2;
-    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - h) / 2;
-    if (mouse_x_pos < x + 18 || mouse_x_pos >= x + w - 18 || mouse_y_pos < y + 108) return -1;
-    int row = (mouse_y_pos - y - 108) / 34;
-    if (row < 0 || row >= file_count || row >= 10 || (mouse_y_pos - y - 108) % 34 >= 30) return -1;
+static int filemgr_pointer_row(void){
+    const framebuffer_info_t* f=framebuffer_info();if(!f||!filemgr_open)return -1;
+    int w=760,h=440;
+    if((int)f->width<w+24)w=(int)f->width-24;
+    if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    if(h<330)h=330;
+    int x=((int)f->width-w)/2,y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
+    if(mouse_x_pos<x+18||mouse_x_pos>=x+w-18||mouse_y_pos<y+108)return -1;
+    int row=(mouse_y_pos-y-108)/34;
+    if(row<0||row>=file_count||row>=10||(mouse_y_pos-y-108)%34>=30)return -1;
     return row;
 }
 
-static int filemgr_pointer_button(void) {
-    const framebuffer_info_t* f = framebuffer_info();
-    if (!f || !filemgr_open) return 0;
-    int w = 760, h = 440;
-    if ((int)f->width < w + 24) w = (int)f->width - 24;
-    if ((int)f->height < h + TOPBAR_H + FOOTER_H) h = (int)f->height - 24;
-    if (h < 330) h = 330;
-    int x = ((int)f->width - w) / 2;
-    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - h) / 2;
-    if (mouse_y_pos < y + h - 78 || mouse_y_pos >= y + h - 48) return 0;
-    if (mouse_x_pos >= x + 18 && mouse_x_pos < x + 112) return 1;
-    if (mouse_x_pos >= x + 120 && mouse_x_pos < x + 214) return 2;
-    if (mouse_x_pos >= x + 222 && mouse_x_pos < x + 316) return 3;
+static int filemgr_pointer_button(void){
+    const framebuffer_info_t* f=framebuffer_info();if(!f||!filemgr_open)return 0;
+    int w=760,h=440;
+    if((int)f->width<w+24)w=(int)f->width-24;
+    if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
+    if(h<330)return 0;
+    int x=((int)f->width-w)/2,y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
+    if(mouse_y_pos<y+h-78||mouse_y_pos>=y+h-48)return 0;
+    if(mouse_x_pos>=x+18&&mouse_x_pos<x+112)return 1;
+    if(mouse_x_pos>=x+120&&mouse_x_pos<x+214)return 2;
+    if(mouse_x_pos>=x+222&&mouse_x_pos<x+316)return 3;
     return 0;
 }
 
@@ -1605,22 +1655,20 @@ static int point_in_settings_row(int row) {
            mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
 }
 
-static void launcher_record_recent(int index) {
-    if (index < 0 || index >= 7) return;
-    int pos = 0;
-    while (pos < 7 && recent_apps[pos] != index) ++pos;
-    if (pos >= 7) pos = 6;
-    while (pos > 0) {
-        recent_apps[pos] = recent_apps[pos - 1];
-        --pos;
-    }
-    recent_apps[0] = index;
-}
-
 static void open_window(int index) {
     if (index < 0 || index >= WINDOW_COUNT) return;
     struct gui_window* w = &windows[index];
     launcher_record_recent(index);
+    if (index < 5) {
+        int pos = 0;
+        while (pos < 5 && recent_apps[pos] != index) ++pos;
+        if (pos >= 5) pos = 4;
+        while (pos > 0) {
+            recent_apps[pos] = recent_apps[pos - 1];
+            --pos;
+        }
+        recent_apps[0] = index;
+    }
     if (!w->visible) {
         int dx, dy, dw, dh;
         dock_geometry(index, &dx, &dy, &dw, &dh);
@@ -1687,177 +1735,105 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     if (!ready) return 0;
 
     if (filemgr_open) {
-        if (event == GUI_KEY_ESCAPE) {
-            gui_filemgr_close();
-            return 1;
-        }
+        if (event == GUI_KEY_ESCAPE) { gui_filemgr_close(); return 1; }
         if (event == GUI_KEY_UP) {
-            if (file_count > 0) filemgr_selected = (filemgr_selected + file_count - 1) % file_count;
-            gui_request_redraw();
-            return 1;
+            if (file_count > 0) filemgr_selected=(filemgr_selected+file_count-1)%file_count;
+            gui_request_redraw(); return 1;
         }
         if (event == GUI_KEY_DOWN) {
-            if (file_count > 0) filemgr_selected = (filemgr_selected + 1) % file_count;
-            gui_request_redraw();
-            return 1;
+            if (file_count > 0) filemgr_selected=(filemgr_selected+1)%file_count;
+            gui_request_redraw(); return 1;
         }
         if (event == '\n' || event == '\r') {
             if (filemgr_selected < file_count)
-                action_push_arg(GUI_ACTION_FILE_OPEN, file_data[filemgr_selected].index);
+                action_push_arg(GUI_ACTION_FILE_OPEN,file_data[filemgr_selected].index);
             return 1;
         }
-        if (event == 'n') {
-            action_push_arg(GUI_ACTION_FILE_CREATE, 0);
-            return 1;
-        }
-        if (event == 'd') {
-            action_push_arg(GUI_ACTION_DIR_CREATE, 0);
-            return 1;
-        }
-        if (event == 'x' || event == 8 || event == GUI_KEY_DELETE) {
+        if (event == 'n') { action_push_arg(GUI_ACTION_FILE_CREATE,0); return 1; }
+        if (event == 'd') { action_push_arg(GUI_ACTION_DIR_CREATE,0); return 1; }
+        if (event == 'x' || event == GUI_KEY_DELETE || event == 8) {
             if (filemgr_selected < file_count)
-                action_push_arg(GUI_ACTION_FILE_DELETE, file_data[filemgr_selected].index);
+                action_push_arg(GUI_ACTION_FILE_DELETE,file_data[filemgr_selected].index);
             return 1;
         }
         return 1;
     }
 
     if (taskmgr_open) {
-        if (event == GUI_KEY_ESCAPE) {
-            gui_taskmgr_close();
-            return 1;
-        }
+        if (event == GUI_KEY_ESCAPE) { gui_taskmgr_close(); return 1; }
         if (event == GUI_KEY_UP) {
-            if (task_count > 0) taskmgr_selected = (taskmgr_selected + task_count - 1) % task_count;
-            gui_request_redraw();
-            return 1;
+            if (task_count > 0) taskmgr_selected=(taskmgr_selected+task_count-1)%task_count;
+            gui_request_redraw(); return 1;
         }
         if (event == GUI_KEY_DOWN) {
-            if (task_count > 0) taskmgr_selected = (taskmgr_selected + 1) % task_count;
-            gui_request_redraw();
-            return 1;
+            if (task_count > 0) taskmgr_selected=(taskmgr_selected+1)%task_count;
+            gui_request_redraw(); return 1;
         }
-        if (event == 'c') taskmgr_sort_mode = 1;
-        else if (event == 'm') taskmgr_sort_mode = 2;
-        else if (event == 'n') taskmgr_sort_mode = 0;
+        if (event == 'c') taskmgr_sort_mode=1;
+        else if (event == 'm') taskmgr_sort_mode=2;
+        else if (event == 'n') taskmgr_sort_mode=0;
         else if (event == 'x') {
             if (taskmgr_selected < task_count) {
-                int idx = task_order[taskmgr_selected];
-                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_TERMINATE, task_data[idx].pid);
+                int idx=task_order[taskmgr_selected];
+                if(idx>=0&&idx<task_count)action_push_arg(GUI_ACTION_TASK_TERMINATE,task_data[idx].pid);
             }
         } else if (event == 'r') {
             if (taskmgr_selected < task_count) {
-                int idx = task_order[taskmgr_selected];
-                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_RESTART, task_data[idx].pid);
+                int idx=task_order[taskmgr_selected];
+                if(idx>=0&&idx<task_count)action_push_arg(GUI_ACTION_TASK_RESTART,task_data[idx].pid);
             }
-        } else {
-            return 1;
-        }
-        taskmgr_sort_data();
-        gui_request_redraw();
-        return 1;
+        } else return 1;
+        taskmgr_sort_data(); gui_request_redraw(); return 1;
     }
 
     if (launcher_open) {
-        int matches = launcher_match_count();
-        if (event == GUI_KEY_ESCAPE) {
-            launcher_open = 0;
-            launcher_reset_search();
-            gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
+        int matches=launcher_match_count();
+        if(event==GUI_KEY_ESCAPE){launcher_open=0;launcher_reset_search();gui_request_redraw();return 1;}
+        if(event==GUI_KEY_UP){if(matches>0)launcher_selected=(launcher_selected+matches-1)%matches;gui_request_redraw();return 1;}
+        if(event==GUI_KEY_DOWN){if(matches>0)launcher_selected=(launcher_selected+1)%matches;gui_request_redraw();return 1;}
+        if(event=='\n'||event=='\r'){if(matches>0)open_launcher_app(launcher_match_at(launcher_selected));return 1;}
+        if(event==8||event==GUI_KEY_DELETE){
+            if(launcher_query_len>0){--launcher_query_len;launcher_query[launcher_query_len]=0;launcher_selected=0;gui_request_redraw();}
             return 1;
         }
-        if (event == GUI_KEY_UP) {
-            if (matches > 0) launcher_selected = (launcher_selected + matches - 1) % matches;
-            gui_request_redraw_rect(18, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H);
-            return 1;
-        }
-        if (event == GUI_KEY_DOWN) {
-            if (matches > 0) launcher_selected = (launcher_selected + 1) % matches;
-            gui_request_redraw_rect(18, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H);
-            return 1;
-        }
-        if (event == '\n' || event == '\r') {
-            if (matches > 0) {
-                int index = launcher_match_at(launcher_selected);
-                open_launcher_app(index);
-            }
-            return 1;
-        }
-        if (event == 8 || event == GUI_KEY_DELETE) {
-            if (launcher_query_len > 0) {
-                --launcher_query_len;
-                launcher_query[launcher_query_len] = 0;
-                launcher_selected = 0;
-                gui_request_redraw_rect(18, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H);
-            }
-            return 1;
-        }
-        if (!ctrl && event >= 32 && event < 127) {
-            if (launcher_query_len < (int)sizeof(launcher_query) - 1) {
-                launcher_query[launcher_query_len++] = (char)event;
-                launcher_query[launcher_query_len] = 0;
-                launcher_selected = 0;
-                gui_request_redraw_rect(18, TOPBAR_H + 8, LAUNCHER_W, LAUNCHER_H);
-            }
-            return 1;
+        if(!ctrl&&event>=32&&event<127&&launcher_query_len<(int)sizeof(launcher_query)-1){
+            launcher_query[launcher_query_len++]=(char)event;
+            launcher_query[launcher_query_len]=0;launcher_selected=0;gui_request_redraw();return 1;
         }
         return 1;
     }
 
     if (quick_settings_open) {
-        if (event == GUI_KEY_ESCAPE) {
-            quick_settings_open = 0;
-            gui_request_redraw_rect(0, TOPBAR_H, (int)framebuffer_info()->width, QUICK_H + 18);
-            return 1;
-        }
-        if (event == '1' || event == '2' || event == '3') {
-            if (event == '1') action_push(GUI_ACTION_THEME, 0);
-            else if (event == '2') notifications_enabled = !notifications_enabled;
-            else animations_enabled = !animations_enabled;
-            if (!animations_enabled) finish_all_window_animations();
-            gui_request_redraw();
-            return 1;
+        if(event==GUI_KEY_ESCAPE){quick_settings_open=0;gui_request_redraw();return 1;}
+        if(event=='1'||event=='2'||event=='3'){
+            if(event=='1')action_push(GUI_ACTION_THEME,0);
+            else if(event=='2')notifications_enabled=!notifications_enabled;
+            else animations_enabled=!animations_enabled;
+            if(!animations_enabled)finish_all_window_animations();
+            gui_request_redraw();return 1;
         }
         return 1;
     }
 
-    if (focused_window < 0 || focused_window >= WINDOW_COUNT) {
-        if (event == GUI_KEY_ESCAPE) {
-            launcher_open = 0;
-            quick_settings_open = 0;
-            power_open = 0;
-            gui_request_redraw();
-            return 1;
-        }
+    if(focused_window<0||focused_window>=WINDOW_COUNT){
+        if(event==GUI_KEY_ESCAPE){launcher_open=0;quick_settings_open=0;power_open=0;gui_request_redraw();return 1;}
         return 0;
     }
 
-    if (ctrl && event >= '1' && event <= '5') return 0;
-    if (focused_window == 0) return 0;
-
-    if (focused_window == 3) {
-        if (event == '\n' || event == '\r') {
-            calculator_evaluate();
-            return 1;
-        }
-        if (event == 8 || event == 127 || event == GUI_KEY_DELETE) {
-            calculator_backspace();
-            gui_request_redraw();
-            return 1;
-        }
-        if (event >= 32 && event < 127) {
-            char c = (char)event;
-            if ((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '*' ||
-                c == '/' || c == '%' || c == '(' || c == ')' || c == '.') {
-                calculator_append_char(c);
-                gui_request_redraw();
-                return 1;
+    if(ctrl&&event>='1'&&event<='5')return 0;
+    if(focused_window==0)return 0;
+    if(focused_window==3){
+        if(event=='\n'||event=='\r'){calculator_evaluate();return 1;}
+        if(event==8||event==127||event==GUI_KEY_DELETE){calculator_backspace();gui_request_redraw();return 1;}
+        if(event>=32&&event<127){
+            char ch=(char)event;
+            if((ch>='0'&&ch<='9')||ch=='+'||ch=='-'||ch=='*'||ch=='/'||ch=='%'||ch=='('||ch==')'||ch=='.'){
+                calculator_append_char(ch);gui_request_redraw();return 1;
             }
         }
     }
-
-    if (event == GUI_KEY_ESCAPE) return 1;
-    if (event == GUI_KEY_CTRL_L) return 1;
+    if(event==GUI_KEY_ESCAPE)return 1;
+    if(event==GUI_KEY_CTRL_L)return 1;
     return 1;
 }
 void gui_init(void) {
@@ -1892,6 +1868,14 @@ void gui_init(void) {
     launcher_query_len = 0;
     launcher_query[0] = 0;
     for (int i = 0; i < 7; ++i) recent_apps[i] = i;
+    taskmgr_open = 0;
+    taskmgr_selected = 0;
+    taskmgr_sort_mode = 0;
+    task_count = 0;
+    for (int i = 0; i < 8; ++i) task_order[i] = i;
+    filemgr_open = 0;
+    filemgr_selected = 0;
+    file_count = 0;
     quick_settings_open = 0;
     notification_open = 1;
     notifications_cleared = 0;
@@ -2319,36 +2303,16 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
 
     if (pressed & 1u) {
         if (filemgr_open) {
-            int row = filemgr_pointer_row();
-            int button = filemgr_pointer_button();
-            if (row >= 0) {
-                filemgr_selected = row;
-                gui_request_redraw();
-            } else if (button == 1) {
-                action_push_arg(GUI_ACTION_FILE_CREATE, 0);
-                gui_request_redraw();
-            } else if (button == 2) {
-                action_push_arg(GUI_ACTION_DIR_CREATE, 0);
-                gui_request_redraw();
-            } else if (button == 3 && filemgr_selected < file_count) {
-                action_push_arg(GUI_ACTION_FILE_DELETE, file_data[filemgr_selected].index);
-                gui_request_redraw();
-            }
+            int row=filemgr_pointer_row(), button=filemgr_pointer_button();
+            if(row>=0){filemgr_selected=row;gui_request_redraw();}
+            else if(button==1){action_push_arg(GUI_ACTION_FILE_CREATE,0);gui_request_redraw();}
+            else if(button==2){action_push_arg(GUI_ACTION_DIR_CREATE,0);gui_request_redraw();}
+            else if(button==3&&filemgr_selected<file_count){action_push_arg(GUI_ACTION_FILE_DELETE,file_data[filemgr_selected].index);gui_request_redraw();}
         } else if (taskmgr_open) {
-            int row = taskmgr_pointer_row();
-            int button = taskmgr_pointer_button();
-            if (row >= 0) {
-                taskmgr_selected = row;
-                gui_request_redraw();
-            } else if (button == 1 && taskmgr_selected < task_count) {
-                int idx = task_order[taskmgr_selected];
-                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_TERMINATE, task_data[idx].pid);
-                gui_request_redraw();
-            } else if (button == 2 && taskmgr_selected < task_count) {
-                int idx = task_order[taskmgr_selected];
-                if (idx >= 0 && idx < task_count) action_push_arg(GUI_ACTION_TASK_RESTART, task_data[idx].pid);
-                gui_request_redraw();
-            }
+            int row=taskmgr_pointer_row(), button=taskmgr_pointer_button();
+            if(row>=0){taskmgr_selected=row;gui_request_redraw();}
+            else if(button==1&&taskmgr_selected<task_count){int idx=task_order[taskmgr_selected];if(idx>=0&&idx<task_count)action_push_arg(GUI_ACTION_TASK_TERMINATE,task_data[idx].pid);gui_request_redraw();}
+            else if(button==2&&taskmgr_selected<task_count){int idx=task_order[taskmgr_selected];if(idx>=0&&idx<task_count)action_push_arg(GUI_ACTION_TASK_RESTART,task_data[idx].pid);gui_request_redraw();}
         } else if (launcher_open) {
             int launcher_item = -1;
             if (point_in_launcher_item(&launcher_item)) {
