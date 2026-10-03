@@ -43,6 +43,10 @@ typedef struct {
     int clock_24h;
 } gui_preferences_t;
 
+typedef struct {
+    const char* text;
+} gui_log_entry_t;
+
 #define GUI_ACTION_THEME 1
 #define GUI_ACTION_REBOOT 2
 #define GUI_ACTION_SHUTDOWN 3
@@ -82,6 +86,8 @@ void gui_network_open(void);
 void gui_panic(int code);
 void gui_get_preferences(gui_preferences_t* out);
 void gui_set_preferences(const gui_preferences_t* prefs);
+void gui_log_set_data(const gui_log_entry_t* entries, int count);
+void gui_log_open(void);
 #ifdef UNIT_TEST
 int gui_test_calculate(const char* expression, int32_t* result);
 #endif
