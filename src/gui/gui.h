@@ -6,12 +6,25 @@
 typedef struct {
     int type;
     const char* value;
+    int arg;
 } gui_action_t;
 
-#define GUI_ACTION_NONE 0
+typedef struct {
+    int pid;
+    const char* name;
+    const char* state;
+    int cpu_percent;
+    int memory_kib;
+    int priority;
+} gui_task_info_t;
+
 #define GUI_ACTION_THEME 1
 #define GUI_ACTION_REBOOT 2
 #define GUI_ACTION_SHUTDOWN 3
+#define GUI_ACTION_TASK_TERMINATE 4
+#define GUI_ACTION_TASK_RESTART 5
+
+#define GUI_ACTION_NONE 0
 
 void gui_init(void);
 int gui_available(void);
@@ -30,6 +43,8 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t buttons);
 void gui_set_runtime_ticks(uint32_t ticks);
 void gui_set_clock(int hour, int minute, int second, int day, int month, int year);
 void gui_open_window(int index);
+void gui_taskmgr_set_data(const gui_task_info_t* tasks, int count);
+void gui_taskmgr_open(void);
 #ifdef UNIT_TEST
 int gui_test_calculate(const char* expression, int32_t* result);
 #endif
