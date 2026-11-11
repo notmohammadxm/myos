@@ -64,6 +64,7 @@ void gui_init(void);
 int gui_available(void);
 int gui_keyboard_event(int event, int ctrl, int shift);
 void gui_set_theme(const char* name);
+void gui_set_mouse_available(int available);
 void gui_terminal_clear(void);
 void gui_terminal_begin_input(void);
 void gui_terminal_edit(const char* text, int len, int cursor_pos, uint8_t shell_color);

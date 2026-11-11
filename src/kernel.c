@@ -2845,7 +2845,8 @@ void kernel_main(uint32_t magic, void* mb_info) {
     pic_remap();
     pit_init(100u);
     if (gui_available()) {
-        (void)mouse_init();
+        int mouse_ok = mouse_init();
+        gui_set_mouse_available(mouse_ok);
         gui_console_enabled = 1;
         gui_terminal_clear();
     }
