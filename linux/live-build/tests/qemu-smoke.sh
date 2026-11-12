@@ -19,7 +19,7 @@ fi
 
 echo "Booting $iso in QEMU; waiting for desktop, browser and HTTPS markers."
 set +e
-timeout --signal=TERM --kill-after=5s 240s qemu-system-x86_64 \
+timeout --signal=TERM --kill-after=5s 210s qemu-system-x86_64 \
   "${accel_args[@]}" \
   -m 4096 -smp 4 \
   "${cpu_args[@]}" \
