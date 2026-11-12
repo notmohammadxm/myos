@@ -39,4 +39,6 @@ Firefox ESR is installed and registered as the default web browser and is also a
 
 ## Package policy
 
+The image targets Plasma 6 from Debian Trixie. Wayland support and the `plasma.desktop` session are provided by the Trixie `plasma-workspace` package; the older `plasma-workspace-wayland` package name is not part of Trixie's package set.
+
 The package list is explicit and intentionally small relative to a full KDE metapackage. Debian dependencies and recommends may add packages. Review the final package manifest and image size from CI before promoting the configuration.
