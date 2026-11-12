@@ -45,15 +45,17 @@ The current kernel owns its boot path, interrupt handling, memory model, framebu
 
 **Exit:** reviewed architecture docs; no changes to legacy build path.
 
-### Phase 1 — Linux live-image proof of concept
+### Phase 1 — Linux live-image proof of concept (implementation in progress)
 
-- Add a reproducible Debian live-build configuration for amd64.
+- [x] Add Debian live-build configuration for amd64.
+- [x] Include Plasma Wayland/KWin, SDDM first-boot autologin, NetworkManager, Wi-Fi supplicant/firmware and Firefox ESR.
+- [x] Add QEMU serial smoke checks for Plasma session, browser executable and HTTPS connectivity.
 - Include Linux kernel, systemd, GRUB BIOS/EFI support, firmware where licensing permits, NetworkManager, SDDM, Plasma, KWin Wayland, Qt 6 and XWayland.
 - Build in CI using pinned Debian release and package manifests.
 - Boot under QEMU in both BIOS and UEFI modes where runner support permits.
 - Verify a graphical login/session, not merely a kernel boot.
 
-**Exit:** downloadable ISO boots to a working Plasma Wayland desktop in QEMU; build manifest and checksums are published.
+**Exit:** CI must build and publish the ISO, then pass the QEMU desktop/browser/HTTPS smoke test. Hardware Wi-Fi and real-device graphics remain separate manual validation.
 
 ### Phase 2 — MyOS visual identity
 
