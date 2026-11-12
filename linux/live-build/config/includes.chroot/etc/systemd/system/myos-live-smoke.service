@@ -1,7 +1,7 @@
 [Unit]
 Description=MyOS live desktop and network smoke test
-After=NetworkManager.service NetworkManager-wait-online.service sddm.service
-Wants=NetworkManager-wait-online.service
+After=network-online.target display-manager.service
+Wants=network-online.target
 
 [Service]
 Type=oneshot
@@ -10,4 +10,4 @@ TimeoutStartSec=150
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
