@@ -1,10 +1,10 @@
-name: Build MyOS ISO
+name: MyOS CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, "fix/**"]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -15,55 +15,77 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  validate:
+    name: Host tests, ISO and QEMU
     runs-on: ubuntu-24.04
-
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install toolchain
+      - name: Install toolchain (with network retries)
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            nasm gcc-multilib binutils xorriso mtools \
-            grub-pc-bin grub-common qemu-system-x86
+          set -euo pipefail
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update
+          for attempt in 1 2 3 4 5; do
+            if sudo apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
+              nasm gcc-multilib binutils xorriso mtools grub-pc-bin grub-common qemu-system-x86; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              echo "::error::Toolchain installation failed after five attempts."
+              exit 1
+            fi
+            echo "Package mirror unavailable; retrying in $((attempt * 10)) seconds..."
+            sleep $((attempt * 10))
+          done
 
       - name: Host unit tests
         run: make test
 
-      - name: Build
+      - name: Build bootable ISO
         run: make clean all
 
       - name: Validate Multiboot2 kernel
         run: make verify
 
       - name: QEMU boot smoke test
+        shell: bash
         run: |
+          set -euo pipefail
           qemu-img create -f raw qemu-disk.img 16M
-          set +e
-          timeout 8s qemu-system-i386             -cdrom myos.iso             -drive file=qemu-disk.img,format=raw,if=ide             -m 128M             -display none             -monitor none             -serial none             -netdev user,id=n0             -device rtl8139,netdev=n0             -debugcon file:qemu-debug.log             -global isa-debugcon.iobase=0xe9
-          status=$?
-          set -e
-          test "$status" -eq 124
-          grep -q "MYOS_READY" qemu-debug.log
-          grep -q "MYOS_NET_READY" qemu-debug.log
-          grep -q "MYOS_ATA_READY" qemu-debug.log
-          grep -q "MYOS_FS_PERSISTENT" qemu-debug.log
-          grep -q "MYOS_SETTINGS_PERSISTENT" qemu-debug.log
-          rm -f qemu-debug.log
-          set +e
-          timeout 8s qemu-system-i386             -cdrom myos.iso             -drive file=qemu-disk.img,format=raw,if=ide             -m 128M             -display none             -monitor none             -serial none             -netdev user,id=n0             -device rtl8139,netdev=n0             -debugcon file:qemu-debug.log             -global isa-debugcon.iobase=0xe9
-          status=$?
-          set -e
-          test "$status" -eq 124
-          grep -q "MYOS_READY" qemu-debug.log
-          grep -q "MYOS_FS_PERSISTENT" qemu-debug.log
-          grep -q "MYOS_SETTINGS_PERSISTENT" qemu-debug.log
+          boot_qemu() {
+            local log="$1"
+            local status=0
+            timeout --signal=TERM --kill-after=2s 12s qemu-system-i386 \
+              -cdrom myos.iso \
+              -drive file=qemu-disk.img,format=raw,if=ide \
+              -m 128M -display none -monitor none -serial none \
+              -netdev user,id=n0 -device rtl8139,netdev=n0 \
+              -debugcon "file:$log" -global isa-debugcon.iobase=0xe9 || status=$?
+            if [ "$status" -ne 124 ]; then
+              echo "::error::QEMU exited unexpectedly (status $status)."
+              cat "$log" || true
+              return 1
+            fi
+            grep -q "MYOS_READY" "$log"
+            grep -q "MYOS_NET_READY" "$log"
+            grep -q "MYOS_ATA_READY" "$log"
+            grep -q "MYOS_FS_PERSISTENT" "$log"
+            grep -q "MYOS_SETTINGS_PERSISTENT" "$log"
+          }
+          boot_qemu qemu-first-boot.log
+          boot_qemu qemu-second-boot.log
 
-      - name: Upload ISO artifact
+      - name: Upload diagnostics and ISO
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: myos-iso
-          path: myos.iso
-          if-no-files-found: error
+          name: myos-ci-output
+          path: |
+            myos.iso
+            qemu-first-boot.log
+            qemu-second-boot.log
+          if-no-files-found: ignore
