@@ -1954,20 +1954,37 @@ static void draw_power_menu(void) {
     draw_text_centered(x + 14, y + 68, 104, "REBOOT", warning);
     draw_text_centered(x + 132, y + 68, 104, "SHUTDOWN", danger);
 }
+/* High-contrast 10x18 pointer: dark outline, light body and a restrained
+ * cyan highlight. The hotspot remains the upper-left pixel. */
 static void draw_cursor_framebuffer(int x, int y) {
-    static const uint8_t shape[17][2] = {
-        {0,0},{0,1},{0,2},{0,3},{0,4},{0,5},{0,6},{0,7},{0,8},
-        {1,8},{2,10},{3,12},{4,15},{5,15},{5,12},{4,10},{3,8}
+    static const uint16_t shape[18] = {
+        0x200u, 0x300u, 0x380u, 0x3C0u, 0x3E0u, 0x3F0u,
+        0x3F8u, 0x3FCu, 0x3FEu, 0x3FFu, 0x3E0u, 0x370u,
+        0x338u, 0x31Cu, 0x30Eu, 0x307u, 0x303u, 0x301u
     };
-    for (unsigned i = 0; i < sizeof(shape)/sizeof(shape[0]); ++i)
-        framebuffer_pixel(x + shape[i][0] + 1, y + shape[i][1] + 1, bg);
-    for (unsigned i = 0; i < sizeof(shape)/sizeof(shape[0]); ++i)
-        framebuffer_pixel(x + shape[i][0], y + shape[i][1], text);
+    const uint32_t outline = framebuffer_make_color(3, 8, 15);
+    for (int row = 0; row < 18; ++row) {
+        for (int col = 0; col < 10; ++col) {
+            if (!(shape[row] & (uint16_t)(1u << (9 - col)))) continue;
+            framebuffer_pixel(x + col + 2, y + row + 2, outline);
+            for (int oy = -1; oy <= 1; ++oy)
+                for (int ox = -1; ox <= 1; ++ox)
+                    if (ox || oy)
+                        framebuffer_pixel(x + col + ox, y + row + oy, outline);
+        }
+    }
+    for (int row = 0; row < 18; ++row) {
+        for (int col = 0; col < 10; ++col) {
+            if (!(shape[row] & (uint16_t)(1u << (9 - col)))) continue;
+            uint32_t fill = (col == 1 && row >= 3 && row <= 8) ? accent : text;
+            framebuffer_pixel(x + col, y + row, fill);
+        }
+    }
 }
 
 static void update_cursor_overlay(void) {
-    const int cursor_w = 7;
-    const int cursor_h = 17;
+    const int cursor_w = 12;
+    const int cursor_h = 20;
     if (cursor_drawn_valid &&
         (cursor_drawn_x != mouse_x_pos || cursor_drawn_y != mouse_y_pos)) {
         renderer_present_rect(cursor_drawn_x, cursor_drawn_y, cursor_w, cursor_h);
@@ -2618,7 +2635,7 @@ void gui_present(void) {
         int px = dirty_x0, py = dirty_y0;
         int pw = dirty_x1 - dirty_x0, ph = dirty_y1 - dirty_y0;
         if (cursor_drawn_valid)
-            renderer_present_rect(cursor_drawn_x, cursor_drawn_y, 8, 18);
+            renderer_present_rect(cursor_drawn_x, cursor_drawn_y, 12, 20);
         renderer_set_clip_rect(px, py, pw, ph);
         gui_redraw();
         renderer_clear_clip();
