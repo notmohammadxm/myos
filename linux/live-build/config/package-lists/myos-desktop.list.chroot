@@ -1,0 +1,53 @@
+# Base live system and kernel
+live-boot
+live-config
+live-config-systemd
+systemd-sysv
+linux-image-amd64
+grub-pc
+grub-efi-amd64
+grub-efi-amd64-bin
+grub-pc-bin
+grub2-common
+firmware-linux-free
+firmware-linux
+
+# Graphical session: KDE Plasma on Wayland
+plasma-desktop
+plasma-workspace
+plasma-workspace-wayland
+kwin-wayland
+sddm
+qt6-wayland
+xwayland
+dbus-user-session
+polkit-kde-agent-1
+xdg-desktop-portal
+xdg-desktop-portal-kde
+
+# Hardware and desktop services
+network-manager
+pipewire
+pipewire-pulse
+wireplumber
+libinput
+mesa-utils
+
+# Useful first-boot applications
+dolphin
+konsole
+firefox-esr
+kate
+ark
+spectacle
+plasma-nm
+plasma-pa
+
+# Fonts, localization and boot presentation
+locales
+fonts-dejavu
+fonts-noto-core
+fonts-noto-color-emoji
+plymouth
+plymouth-themes
+desktop-base
