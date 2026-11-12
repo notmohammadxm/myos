@@ -4,7 +4,7 @@ This directory is reserved for the next-generation Linux-based MyOS distribution
 
 The target is Debian Stable (amd64), a Debian-supported Linux kernel, systemd, Wayland/KWin, and a hybrid KDE Plasma + MyOS Qt 6/QML desktop.
 
-An initial Debian live-build configuration and a separate GitHub Actions ISO-build workflow are now present. The image has not yet been built or boot-tested; CI must pass and a graphical QEMU session test is still required before calling Phase 1 complete.
+An initial Debian live-build configuration is present. The live image is configured to log in to Plasma Wayland, manage wired/Wi-Fi networking with NetworkManager and include Firefox ESR as the default browser. A separate GitHub Actions job builds the ISO and checks desktop, browser and outbound HTTPS from QEMU. The job must pass before a build is considered validated.
 
 See:
 
