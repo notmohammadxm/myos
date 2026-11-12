@@ -147,6 +147,45 @@ static void test_framebuffer_gui(void) {
     renderer_init();
     gui_init();
     check(gui_available());
+
+    /* Minimize to the dock and restore from the taskbar without losing geometry. */
+    check(gui_test_window_visible(0));
+    gui_mouse_event(54, -188, 0, 1); /* title-bar minimize control */
+    gui_mouse_event(0, 0, 0, 0);
+    for (uint32_t tick = 2; tick <= 50; tick += 2) gui_set_runtime_ticks(tick);
+    check(gui_test_window_minimized(0));
+    gui_mouse_event(-344, 443, 0, 1); /* first dock item */
+    gui_mouse_event(0, 0, 0, 0);
+    for (uint32_t tick = 52; tick <= 100; tick += 2) gui_set_runtime_ticks(tick);
+    check(gui_test_window_visible(0));
+    check(!gui_test_window_minimized(0));
+
+    /* Notifications mirror the kernel feed and can be cleared from the panel. */
+    gui_log_entry_t notification_data[2] = {
+        { "Network link restored" }, { "Theme changed" }
+    };
+    gui_notification_set_data(notification_data, 2);
+    check(gui_test_notification_count() == 2);
+    gui_mouse_event(477, -272, 0, 1); /* notification bell */
+    gui_mouse_event(0, 0, 0, 0);
+    check(gui_test_notification_visible());
+    gui_mouse_event(-167, 441, 0, 1); /* Clear all */
+    gui_mouse_event(0, 0, 0, 0);
+    check(!gui_test_notification_visible());
+    gui_action_t clear_action;
+    check(gui_poll_action(&clear_action) &&
+          clear_action.type == GUI_ACTION_NOTIFICATION_CLEAR);
+    gui_notification_set_data(notification_data, 0);
+    check(gui_test_notification_count() == 0);
+
+    /* Escape closes the notification overlay without deleting its messages. */
+    gui_notification_set_data(notification_data, 2);
+    gui_mouse_event(477, -272, 0, 1);
+    gui_mouse_event(0, 0, 0, 0);
+    check(gui_test_notification_visible());
+    check(gui_keyboard_event(0x8C, 0, 0));
+    check(!gui_test_notification_visible());
+
     gui_terminal_begin_input();
     gui_terminal_edit("TEST", 4, 2, 0x0A);
     gui_terminal_set_cursor(1);

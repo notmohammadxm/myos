@@ -57,6 +57,7 @@ typedef struct {
 #define GUI_ACTION_DIR_CREATE 8
 #define GUI_ACTION_FILE_OPEN 9
 #define GUI_ACTION_NET_PING 10
+#define GUI_ACTION_NOTIFICATION_CLEAR 11
 
 #define GUI_ACTION_NONE 0
 
@@ -88,9 +89,14 @@ void gui_panic(int code);
 void gui_get_preferences(gui_preferences_t* out);
 void gui_set_preferences(const gui_preferences_t* prefs);
 void gui_log_set_data(const gui_log_entry_t* entries, int count);
+void gui_notification_set_data(const gui_log_entry_t* entries, int count);
 void gui_log_open(void);
 #ifdef UNIT_TEST
 int gui_test_calculate(const char* expression, int32_t* result);
+int gui_test_notification_count(void);
+int gui_test_notification_visible(void);
+int gui_test_window_minimized(int index);
+int gui_test_window_visible(int index);
 #endif
 int gui_take_terminal_cursor(int* cursor_pos);
 int gui_poll_action(gui_action_t* action);

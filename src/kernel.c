@@ -565,6 +565,8 @@ static void trim_spaces(char* s) {
 
 /* ---------- logging / notifications ---------- */
 
+static void notifications_gui_update(void);
+
 static void log_event(const char* message) {
     str_copy(logs[log_head], message, LOG_LEN);
     log_head = (log_head + 1) % LOG_COUNT;
@@ -575,6 +577,7 @@ static void notify_add(const char* message) {
     str_copy(notifications[notify_head], message, NOTIFY_LEN);
     notify_head = (notify_head + 1) % NOTIFY_COUNT;
     if (notify_count < NOTIFY_COUNT) ++notify_count;
+    notifications_gui_update();
 }
 
 static void cmd_logs(const char* arg) {
@@ -606,6 +609,7 @@ static void cmd_notifications(const char* arg) {
     if (streq(arg, "clear")) {
         notify_count = 0;
         notify_head = 0;
+        notifications_gui_update();
         print("Notifications cleared.\n");
         return;
     }
@@ -1228,6 +1232,18 @@ static void logs_gui_update(void) {
         snapshot[i].text = logs[index];
     }
     gui_log_set_data(snapshot, count);
+}
+
+static void notifications_gui_update(void) {
+    gui_log_entry_t snapshot[NOTIFY_COUNT];
+    int count = notify_count;
+    if (count > NOTIFY_COUNT) count = NOTIFY_COUNT;
+    int start = (notify_count < NOTIFY_COUNT) ? 0 : notify_head;
+    for (int i = 0; i < count; ++i) {
+        int index = (start + i) % NOTIFY_COUNT;
+        snapshot[i].text = notifications[index];
+    }
+    gui_notification_set_data(snapshot, count);
 }
 
 static void network_gui_update(void) {
@@ -3074,6 +3090,11 @@ void kernel_main(uint32_t magic, void* mb_info) {
                     if (!scheduler_control((uint32_t)action.arg, 1)) log_event("Task terminate rejected");
                 } else if (action.type == GUI_ACTION_TASK_RESTART) {
                     if (!scheduler_control((uint32_t)action.arg, 0)) log_event("Task restart rejected");
+                } else if (action.type == GUI_ACTION_NOTIFICATION_CLEAR) {
+                    notify_count = 0;
+                    notify_head = 0;
+                    log_event("Notifications cleared from GUI");
+                    notifications_gui_update();
                 } else if (action.type == GUI_ACTION_FILE_DELETE) {
                     if (fs_delete_index(action.arg)) {
                         log_event("File deleted from GUI");
