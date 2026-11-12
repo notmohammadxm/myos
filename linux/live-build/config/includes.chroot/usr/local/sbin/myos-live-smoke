@@ -1,0 +1,57 @@
+#!/bin/sh
+set -eu
+
+if [ -e /dev/ttyS0 ]; then
+    exec 3>/dev/ttyS0
+else
+    exec 3>/dev/null
+fi
+
+log() {
+    printf '%s\n' "$1" >&3
+    logger -t myos-live-smoke -- "$1" || true
+}
+
+fail() {
+    log "MYOS_LINUX_SMOKE_FAIL:$1"
+    exit 1
+}
+
+log "MYOS_LINUX_BOOT_OK"
+
+systemctl is-active --quiet NetworkManager || fail "NetworkManager is not active"
+systemctl is-active --quiet sddm || fail "SDDM is not active"
+
+test -x /usr/bin/firefox-esr || fail "Firefox ESR is missing"
+test -f /usr/share/applications/myos-browser.desktop || fail "MyOS Browser launcher is missing"
+firefox-esr --version >/dev/null 2>&1 || fail "Firefox ESR cannot execute"
+log "MYOS_BROWSER_OK"
+
+session_ready=0
+attempt=0
+while [ "$attempt" -lt 60 ]; do
+    if pgrep -u user -x plasmashell >/dev/null 2>&1 &&
+       pgrep -u user -x kwin_wayland >/dev/null 2>&1; then
+        session_ready=1
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+done
+[ "$session_ready" -eq 1 ] || fail "Plasma Wayland session did not start"
+log "MYOS_DESKTOP_OK"
+
+network_ready=0
+attempt=0
+while [ "$attempt" -lt 6 ]; do
+    if curl -fsS --connect-timeout 3 --max-time 6 \
+        https://deb.debian.org/debian/ -o /dev/null; then
+        network_ready=1
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 2
+done
+[ "$network_ready" -eq 1 ] || fail "No HTTPS access through NetworkManager"
+log "MYOS_NETWORK_OK"
+log "MYOS_LINUX_SMOKE_PASS"

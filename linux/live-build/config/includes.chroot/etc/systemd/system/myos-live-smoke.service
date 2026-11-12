@@ -1,0 +1,13 @@
+[Unit]
+Description=MyOS live desktop and network smoke test
+After=network-online.target display-manager.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/myos-live-smoke
+TimeoutStartSec=150
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

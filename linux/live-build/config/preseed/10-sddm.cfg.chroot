@@ -1,0 +1,2 @@
+sddm shared/default-x-display-manager select sddm
+sddm shared/default-x-display-manager seen true

@@ -2,6 +2,12 @@
 
 MyOS is a 32-bit i386 / Multiboot2 operating-system project. The project keeps the existing command shell and adds a graphical desktop layer above it.
 
+## Linux edition (migration in progress)
+
+The next-generation Linux edition is being developed in the separate `migration/linux-desktop` line. It targets Debian Stable amd64, a distribution-supported Linux kernel, Wayland/KWin, and a hybrid KDE Plasma + MyOS Qt/QML desktop. The existing i386 Multiboot2 kernel remains the legacy/learning edition and is not replaced by this migration.
+
+This is currently an architecture and migration baseline; a bootable Linux ISO is not yet available. See [the migration plan](docs/LINUX_MIGRATION_PLAN.md) and [desktop architecture](docs/LINUX_DESKTOP_ARCHITECTURE.md).
+
 ## Current capabilities
 
 - Existing shell commands and line editing remain available.
