@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+# Keep service setup minimal and use Debian's packaged unit files.
+systemctl enable sddm.service
+systemctl enable NetworkManager.service
