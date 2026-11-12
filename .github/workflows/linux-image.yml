@@ -1,0 +1,78 @@
+name: MyOS Linux image
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "linux/**"
+      - ".github/workflows/linux-image.yml"
+  push:
+    branches: ["migration/**"]
+    paths:
+      - "linux/**"
+      - ".github/workflows/linux-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: myos-linux-image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-live-image:
+    name: Debian amd64 live ISO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install live-build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            live-build debootstrap squashfs-tools xorriso \
+            grub-pc-bin grub-efi-amd64-bin grub2-common \
+            mtools dosfstools qemu-system-x86 qemu-utils
+
+      - name: Configure image
+        working-directory: linux/live-build
+        run: |
+          chmod +x auto/config
+          sudo ./auto/config
+
+      - name: Build ISO
+        working-directory: linux/live-build
+        run: sudo lb build
+
+      - name: Validate ISO artifact
+        working-directory: linux/live-build
+        run: |
+          set -euo pipefail
+          iso="$(find . -maxdepth 1 -type f -name '*.iso' -print -quit)"
+          test -n "$iso"
+          test -s "$iso"
+          file "$iso"
+          sha256sum "$iso" | tee SHA256SUMS
+
+      - name: Upload Linux ISO
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: myos-linux-amd64-live-iso
+          path: |
+            linux/live-build/*.iso
+            linux/live-build/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: myos-linux-build-diagnostics
+          path: |
+            linux/live-build/*.log
+            linux/live-build/config/
+          if-no-files-found: ignore
