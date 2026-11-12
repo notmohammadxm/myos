@@ -191,10 +191,10 @@ static uint32_t attr_color(uint8_t attr) {
 
 static void draw_char(int x, int y, char c, uint32_t color) {
     const uint8_t* glyph = font8x14_get(c);
-    for (int r = 0; r < FONT_H; ++r) {
+    for (int r = 0; r < FONT8X14_GLYPH_H; ++r) {
         uint8_t bits = glyph[r];
-        for (int col = 0; col < FONT_W; ++col) {
-            if (bits & (1u << (FONT_W - 1 - col)))
+        for (int col = 0; col < FONT8X14_GLYPH_W; ++col) {
+            if (bits & (1u << (FONT8X14_GLYPH_W - 1 - col)))
                 renderer_pixel(x + col, y + r, color);
         }
     }
