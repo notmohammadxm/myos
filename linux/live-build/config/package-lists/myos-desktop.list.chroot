@@ -17,6 +17,7 @@ wireless-regdb
 # Graphical session: KDE Plasma on Wayland
 plasma-desktop
 plasma-workspace
+plasma-workspace-wallpapers
 kwin-wayland
 sddm
 xserver-xorg
@@ -29,6 +30,11 @@ xdg-desktop-portal-kde
 
 # Hardware and desktop services
 network-manager
+wpasupplicant
+wireless-regdb
+rfkill
+iw
+modemmanager
 pipewire
 pipewire-pulse
 wireplumber
@@ -44,6 +50,7 @@ procps
 dolphin
 konsole
 firefox-esr
+xdg-utils
 kate
 ark
 spectacle
