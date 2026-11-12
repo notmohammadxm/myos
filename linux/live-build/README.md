@@ -16,7 +16,7 @@ Build:
 
 ```sh
 cd linux/live-build
-chmod +x auto/config
+chmod +x auto/config config/hooks/normal/*.hook.chroot
 sudo ./auto/config
 sudo lb build
 ```
