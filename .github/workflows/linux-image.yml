@@ -35,7 +35,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             live-build debootstrap squashfs-tools xorriso \
             grub-pc-bin grub-efi-amd64-bin grub2-common \
-            mtools dosfstools qemu-system-x86 qemu-utils curl
+            mtools dosfstools qemu-system-x86 qemu-utils curl debian-archive-keyring
 
       - name: Configure image
         working-directory: linux/live-build
