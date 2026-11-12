@@ -4,16 +4,19 @@ live-config
 live-config-systemd
 systemd-sysv
 linux-image-amd64
-grub-efi-amd64-bin
-grub-pc-bin
-grub2-common
 firmware-linux-free
 firmware-linux
+firmware-iwlwifi
+firmware-realtek
+firmware-brcm80211
+firmware-atheros
+firmware-mediatek
+wpasupplicant
+wireless-regdb
 
 # Graphical session: KDE Plasma on Wayland
 plasma-desktop
 plasma-workspace
-plasma-workspace-wayland
 kwin-wayland
 sddm
 xserver-xorg
@@ -31,6 +34,11 @@ pipewire-pulse
 wireplumber
 libinput
 mesa-utils
+curl
+ca-certificates
+iproute2
+iputils-ping
+procps
 
 # Useful first-boot applications
 dolphin
