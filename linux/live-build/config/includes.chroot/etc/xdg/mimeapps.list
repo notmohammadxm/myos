@@ -1,0 +1,5 @@
+[Default Applications]
+text/html=myos-browser.desktop
+application/xhtml+xml=myos-browser.desktop
+x-scheme-handler/http=myos-browser.desktop
+x-scheme-handler/https=myos-browser.desktop
