@@ -40,7 +40,7 @@ jobs:
       - name: Configure image
         working-directory: linux/live-build
         run: |
-          chmod +x auto/config
+          chmod +x auto/config config/hooks/normal/*.hook.chroot
           sudo ./auto/config
 
       - name: Build ISO
