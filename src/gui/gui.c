@@ -15,7 +15,12 @@
 #define MIN_WINDOW_W 260
 #define MIN_WINDOW_H 180
 #define WINDOW_COUNT 5
-#define GUI_ACTION_QUEUE_CAPACITY 16
+#define GUI_NOTIFICATION_COUNT 8
+#define GUI_NOTIFICATION_TEXT 80
+#define GUI_NOTIFICATION_VISIBLE 4
+#define GUI_ACTION_QUEUE_CAPACITY 32
+#define NOTIFICATION_W 360
+#define NOTIFICATION_H 208
 #define TITLE_DOUBLE_CLICK_TICKS 35u
 #define SNAP_ZONE 24
 #define RESIZE_ZONE 14
@@ -39,6 +44,8 @@ struct gui_window {
     int x, y, w, h;
     int target_x, target_y, target_w, target_h;
     int restore_x, restore_y, restore_w, restore_h;
+    int resume_x, resume_y, resume_w, resume_h;
+    int resume_maximized, resume_snap_state;
     int dragging;
     int resizing;
     int resize_edges;
@@ -116,9 +123,11 @@ static int log_view_top;
 static int log_view_count;
 static gui_log_entry_t log_view_data[32];
 static uint32_t splash_until;
-static int notification_open = 1;
+static int notification_open;
 static int notifications_enabled = 1;
-static int notifications_cleared;
+static int notifications_unread;
+static int notification_count;
+static char notification_text[GUI_NOTIFICATION_COUNT][GUI_NOTIFICATION_TEXT];
 static int animations_enabled = 1;
 static int power_open;
 static char calc_display[32] = "0";
@@ -331,6 +340,12 @@ static void window_set_initial(struct gui_window* w, int x, int y, int width, in
     w->restore_y = w->y;
     w->restore_w = w->w;
     w->restore_h = w->h;
+    w->resume_x = w->x;
+    w->resume_y = w->y;
+    w->resume_w = w->w;
+    w->resume_h = w->h;
+    w->resume_maximized = 0;
+    w->resume_snap_state = 0;
 }
 
 static void dock_geometry(int index, int* x, int* y, int* w, int* h) {
@@ -929,6 +944,8 @@ static void draw_desktop_chrome(void) {
                     notification_open ? accent : border);
     draw_round_rect(w - 84, 23, 14, 14, 5, notification_open ? accent : muted);
     draw_round_rect(w - 86, 34, 18, 2, 1, notification_open ? accent : muted);
+    if (notifications_enabled && notifications_unread > 0)
+        draw_round_rect(w - 48, 11, 10, 10, 5, danger);
 
     /* Floating dock with animated hover lift. */
     int dock_x = (w - DOCK_W) / 2;
@@ -956,6 +973,14 @@ static void draw_desktop_chrome(void) {
         if (i == 4) draw_icon_monitor(icon_x, icon_y, cc);
         if (i == 5) draw_icon_power(icon_x, icon_y, cc);
         draw_text(cell_x + 40, cell_y + 10, names[i], cc);
+        if (i < WINDOW_COUNT && windows[i].visible) {
+            uint32_t state_color = windows[i].closing ? danger :
+                ((windows[i].minimized || windows[i].minimizing) ? warning :
+                 (focused_window == i ? accent : success));
+            int marker_w = focused_window == i ? 22 : 10;
+            draw_round_rect(cell_x + (cell_w - marker_w) / 2,
+                            cell_y + cell_h - 5, marker_w, 3, 1, state_color);
+        }
     }
 
     draw_round_card(16, h - 49, 152, 30, 12, bg, border);
@@ -1454,27 +1479,50 @@ static void calculator_key(int index) {
     gui_request_redraw();
 }
 
+static void notification_geometry(int* out_x, int* out_y) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return;
+    if (out_x) *out_x = (int)f->width - NOTIFICATION_W - 22;
+    if (out_y) *out_y = (int)f->height - FOOTER_H - NOTIFICATION_H - 22;
+}
+
 static void draw_notification(void) {
     if (!notification_open || !notifications_enabled) return;
     const framebuffer_info_t* f = framebuffer_info();
-    int width = 326, height = 144;
-    int x = (int)f->width - width - 22;
-    int y = (int)f->height - FOOTER_H - height - 22;
-    draw_round_card(x + 5, y + 8, width, height, 18, bg, border);
-    draw_round_card(x, y, width, height, 18, panel2, accent);
-    draw_round_rect(x + 14, y + 16, 7, height - 62, 3, accent);
-    draw_text(x + 34, y + 14, "NOTIFICATIONS", accent);
-    if (notifications_cleared) {
-        draw_text(x + 34, y + 44, "ALL CLEAR", text);
-        draw_text(x + 34, y + 66, "NO ACTIVE NOTIFICATIONS", muted);
+    if (!f) return;
+    int x = 0, y = 0;
+    notification_geometry(&x, &y);
+    draw_round_card(x + 5, y + 8, NOTIFICATION_W, NOTIFICATION_H, 18, bg, border);
+    draw_round_card(x, y, NOTIFICATION_W, NOTIFICATION_H, 18, panel2, accent);
+    draw_round_rect(x + 14, y + 16, 7, NOTIFICATION_H - 62, 3, accent);
+    draw_text(x + 30, y + 14, "NOTIFICATIONS", accent);
+    if (notification_count > 0) {
+        draw_uint_text(x + 210, y + 14, (uint32_t)notification_count, muted);
+        draw_text(x + 232, y + 14, "SAVED", muted);
     } else {
-        draw_round_rect(x + 34, y + 41, 6, 6, 3, success);
-        draw_text(x + 48, y + 37, "MYOS BOOT COMPLETED", text);
-        draw_round_rect(x + 34, y + 67, 6, 6, 3, accent);
-        draw_text(x + 48, y + 63, "GUI SERVICES READY", muted);
+        draw_text(x + 30, y + 48, "YOU'RE ALL CAUGHT UP", success);
     }
-    draw_round_card(x + 18, y + 100, width - 36, 30, 10, bg, border);
-    draw_text_centered(x + 18, y + 107, width - 36, "CLEAR ALL", muted);
+    draw_round_card(x + NOTIFICATION_W - 42, y + 9, 28, 25, 8, bg, border);
+    draw_text(x + NOTIFICATION_W - 33, y + 14, "X", danger);
+
+    int visible = min_int(notification_count, GUI_NOTIFICATION_VISIBLE);
+    for (int row = 0; row < visible; ++row) {
+        int index = notification_count - 1 - row;
+        int yy = y + 42 + row * 28;
+        draw_round_rect(x + 22, yy + 9, 6, 6, 3, row == 0 ? accent : muted);
+        draw_text_clipped(x + 38, yy + 3, notification_text[index],
+                          row == 0 ? text : muted, NOTIFICATION_W - 68);
+    }
+    if (notification_count > visible) {
+        int older = notification_count - visible;
+        draw_text(x + 22, y + 42 + visible * 28, "+", muted);
+        draw_uint_text(x + 36, y + 42 + visible * 28, (uint32_t)older, muted);
+        draw_text(x + 56, y + 42 + visible * 28, "OLDER NOTIFICATIONS", muted);
+    }
+    int button_y = y + NOTIFICATION_H - 38;
+    draw_round_card(x + 18, button_y, NOTIFICATION_W - 36, 28, 9, bg, border);
+    draw_text_centered(x + 18, button_y + 7, NOTIFICATION_W - 36,
+                        notification_count ? "CLEAR ALL" : "CLOSE", muted);
 }
 static int quick_settings_x(void) {
     const framebuffer_info_t* f = framebuffer_info();
@@ -1593,6 +1641,41 @@ void gui_log_set_data(const gui_log_entry_t* entries,int count){
         log_view_selected = max_int(0, log_view_count - 1);
     log_view_ensure_visible();
     if (log_view_open) gui_request_redraw();
+}
+
+void gui_notification_set_data(const gui_log_entry_t* entries, int count) {
+    if (!ready || (count > 0 && !entries)) return;
+    int next_count = max_int(0, min_int(count, GUI_NOTIFICATION_COUNT));
+    char previous_latest[GUI_NOTIFICATION_TEXT];
+    previous_latest[0] = 0;
+    if (notification_count > 0)
+        gui_strcopy(previous_latest, notification_text[notification_count - 1],
+                    (int)sizeof(previous_latest));
+
+    for (int i = 0; i < next_count; ++i)
+        gui_strcopy(notification_text[i], entries[i].text, GUI_NOTIFICATION_TEXT);
+    for (int i = next_count; i < GUI_NOTIFICATION_COUNT; ++i)
+        notification_text[i][0] = 0;
+
+    int latest_changed = next_count > 0 &&
+        (notification_count == 0 ||
+         gui_strlen(previous_latest) != gui_strlen(notification_text[next_count - 1]));
+    if (!latest_changed && next_count > 0) {
+        int j = 0;
+        while (previous_latest[j] && notification_text[next_count - 1][j] &&
+               previous_latest[j] == notification_text[next_count - 1][j]) ++j;
+        latest_changed = previous_latest[j] != notification_text[next_count - 1][j];
+    }
+
+    if (next_count == 0) notifications_unread = 0;
+    else if (notification_open) notifications_unread = 0;
+    else if (next_count > notification_count)
+        notifications_unread += next_count - notification_count;
+    else if (latest_changed)
+        ++notifications_unread;
+
+    notification_count = next_count;
+    gui_request_redraw();
 }
 
 void gui_log_open(void){
@@ -2044,15 +2127,30 @@ static int point_in_quick_settings_item(int row) {
     return 0;
 }
 
-static int point_in_notification_clear(void) {
+static int point_in_notification_panel(void) {
     if (!notification_open || !notifications_enabled) return 0;
-    const framebuffer_info_t* f = framebuffer_info();
-    if (!f) return 0;
-    int width = 326, height = 144;
-    int x = (int)f->width - width - 22;
-    int y = (int)f->height - FOOTER_H - height - 22;
-    return mouse_x_pos >= x + 18 && mouse_x_pos < x + width - 18 &&
-           mouse_y_pos >= y + 100 && mouse_y_pos < y + 130;
+    int x = 0, y = 0;
+    notification_geometry(&x, &y);
+    return mouse_x_pos >= x && mouse_x_pos < x + NOTIFICATION_W &&
+           mouse_y_pos >= y && mouse_y_pos < y + NOTIFICATION_H;
+}
+
+static int point_in_notification_close(void) {
+    if (!point_in_notification_panel()) return 0;
+    int x = 0, y = 0;
+    notification_geometry(&x, &y);
+    return mouse_x_pos >= x + NOTIFICATION_W - 42 &&
+           mouse_x_pos < x + NOTIFICATION_W - 14 &&
+           mouse_y_pos >= y + 9 && mouse_y_pos < y + 34;
+}
+
+static int point_in_notification_clear(void) {
+    if (!point_in_notification_panel()) return 0;
+    int x = 0, y = 0;
+    notification_geometry(&x, &y);
+    int button_y = y + NOTIFICATION_H - 38;
+    return mouse_x_pos >= x + 18 && mouse_x_pos < x + NOTIFICATION_W - 18 &&
+           mouse_y_pos >= button_y && mouse_y_pos < button_y + 28;
 }
 
 static int title_control_at(const struct gui_window* w) {
@@ -2117,31 +2215,37 @@ static void open_window(int index) {
         }
         recent_apps[0] = index;
     }
-    if (!w->visible) {
-        int dx, dy, dw, dh;
-        dock_geometry(index, &dx, &dy, &dw, &dh);
-        w->x = dx;
-        w->y = dy;
-        w->w = dw;
-        w->h = dh;
-        w->visible = 1;
+
+    int needs_restore = !w->visible || w->minimized || w->minimizing || w->closing;
+    if (needs_restore) {
+        if (!w->visible) {
+            int dx, dy, dw, dh;
+            dock_geometry(index, &dx, &dy, &dw, &dh);
+            w->x = dx;
+            w->y = dy;
+            w->w = dw;
+            w->h = dh;
+            w->visible = 1;
+        }
         w->minimized = 0;
-        w->opening = 1;
-        w->closing = 0;
         w->minimizing = 0;
-    } else if (w->minimized) {
-        w->minimized = 0;
+        w->closing = 0;
+        w->target_x = w->resume_x;
+        w->target_y = w->resume_y;
+        w->target_w = w->resume_w;
+        w->target_h = w->resume_h;
+        w->maximized = w->resume_maximized;
+        w->snap_state = w->resume_snap_state;
         w->opening = 1;
-        w->target_x = w->restore_x;
-        w->target_y = w->restore_y;
-        w->target_w = w->restore_w;
-        w->target_h = w->restore_h;
+        clamp_target(w);
     }
+
     promote_window(index);
     launcher_open = 0;
     power_open = 0;
     if (!animations_enabled) window_finish_transition(w);
-    else window_transition_rect(w, w->x, w->y, w->w, w->h);
+    else if (needs_restore)
+        window_transition_rect(w, w->x, w->y, w->w, w->h);
     gui_request_redraw_rect(w->x - 12, w->y - 12, w->w + 24, w->h + 24);
 }
 
@@ -2181,6 +2285,11 @@ static void finish_all_window_animations(void) {
 static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     (void)shift;
     if (!ready) return 0;
+    if (event == GUI_KEY_ESCAPE && notification_open) {
+        notification_open = 0;
+        gui_request_redraw();
+        return 1;
+    }
 
     if (log_view_open) {
         if (event == GUI_KEY_ESCAPE) { gui_log_close(); return 1; }
@@ -2285,10 +2394,15 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     if (quick_settings_open) {
         if(event==GUI_KEY_ESCAPE){quick_settings_open=0;gui_request_redraw();return 1;}
         if(event=='1'||event=='2'||event=='3'){
-            if(event=='1')action_push(GUI_ACTION_THEME,0);
-            else if(event=='2')notifications_enabled=!notifications_enabled;
-            else animations_enabled=!animations_enabled;
-            if(!animations_enabled)finish_all_window_animations();
+            if(event=='1') {
+                action_push(GUI_ACTION_THEME,0);
+            } else if(event=='2') {
+                notifications_enabled=!notifications_enabled;
+                if(!notifications_enabled)notification_open=0;
+            } else {
+                animations_enabled=!animations_enabled;
+                if(!animations_enabled)finish_all_window_animations();
+            }
             gui_request_redraw();return 1;
         }
         return 1;
@@ -2369,8 +2483,11 @@ void gui_init(void) {
     network_status.ping_success = 0;
     network_status.ping_fail = 0;
     quick_settings_open = 0;
-    notification_open = 1;
-    notifications_cleared = 0;
+    notification_open = 0;
+    notifications_unread = 0;
+    notification_count = 0;
+    for (int i = 0; i < GUI_NOTIFICATION_COUNT; ++i)
+        notification_text[i][0] = 0;
     power_open = 0;
     clock_hour = clock_minute = clock_second = 0;
     clock_day = clock_month = 0;
@@ -2402,6 +2519,7 @@ void gui_get_preferences(gui_preferences_t* out) {
 void gui_set_preferences(const gui_preferences_t* prefs) {
     if (!ready || !prefs) return;
     notifications_enabled = prefs->notifications_enabled ? 1 : 0;
+    if (!notifications_enabled) notification_open = 0;
     animations_enabled = prefs->animations_enabled ? 1 : 0;
     clock_24h = prefs->clock_24h ? 1 : 0;
     if (!animations_enabled) finish_all_window_animations();
@@ -2719,8 +2837,15 @@ static void handle_title_action(int index, int control) {
     struct gui_window* w = &windows[index];
     int old_x = w->x, old_y = w->y, old_w = w->w, old_h = w->h;
     w->hover_control = 0;
+    if (control == 1 || control == 3) {
+        w->resume_x = w->target_x;
+        w->resume_y = w->target_y;
+        w->resume_w = w->target_w;
+        w->resume_h = w->target_h;
+        w->resume_maximized = w->maximized;
+        w->resume_snap_state = w->snap_state;
+    }
     if (control == 1) {
-        save_restore_geometry(w);
         int dx, dy, dw, dh;
         dock_geometry(index, &dx, &dy, &dw, &dh);
         w->target_x = dx;
@@ -2728,8 +2853,6 @@ static void handle_title_action(int index, int control) {
         w->target_w = dw;
         w->target_h = dh;
         w->minimizing = 1;
-        w->maximized = 0;
-        w->snap_state = 0;
         w->dragging = 0;
         w->resizing = 0;
         mouse_capture_window = -1;
@@ -2857,6 +2980,11 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
     uint8_t released = (uint8_t)((new_buttons ^ mouse_prev_buttons) & mouse_prev_buttons);
 
     if (pressed & 1u) {
+        if (notification_open && !point_in_notification_panel() &&
+            !point_in_notification_bell()) {
+            notification_open = 0;
+            gui_request_redraw();
+        }
         if (log_view_open) {
             int row = log_viewer_pointer_row();
             if (row >= 0) {
@@ -2906,6 +3034,7 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                 gui_request_redraw();
             } else if (point_in_quick_settings_item(1)) {
                 notifications_enabled = !notifications_enabled;
+                if (!notifications_enabled) notification_open = 0;
                 gui_request_redraw();
             } else if (point_in_quick_settings_item(2)) {
                 animations_enabled = !animations_enabled;
@@ -2931,14 +3060,20 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                 power_open = 0;
             }
             gui_request_redraw();
+        } else if (notification_open && point_in_notification_panel()) {
+            if (point_in_notification_close()) {
+                notification_open = 0;
+                gui_request_redraw();
+            } else if (point_in_notification_clear()) {
+                action_push_arg(GUI_ACTION_NOTIFICATION_CLEAR, 0);
+                notification_open = 0;
+                gui_request_redraw();
+            }
         } else if (point_in_launcher_button()) {
             launcher_toggle();
-        } else if (point_in_notification_clear()) {
-            notifications_cleared = 1;
-            notification_open = 1;
-            gui_request_redraw();
         } else if (point_in_notification_bell()) {
             notification_open = !notification_open;
+            if (notification_open) notifications_unread = 0;
             power_open = 0;
             quick_settings_open = 0;
             gui_request_redraw();
@@ -2956,6 +3091,10 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                 launcher_open = 0;
                 quick_settings_open = 0;
                 gui_request_redraw();
+            } else if (dock_hot < WINDOW_COUNT && windows[dock_hot].visible &&
+                       !windows[dock_hot].minimized && !windows[dock_hot].minimizing &&
+                       !windows[dock_hot].closing && focused_window == dock_hot) {
+                handle_title_action(dock_hot, 1);
             } else {
                 open_window(dock_hot);
             }
@@ -3005,6 +3144,7 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                         if (point_in_settings_row(0)) action_push(GUI_ACTION_THEME, 0);
                         else if (point_in_settings_row(1)) {
                             notifications_enabled = !notifications_enabled;
+                            if (!notifications_enabled) notification_open = 0;
                             gui_request_redraw_rect(w->x, w->y, w->w, w->h);
                         } else if (point_in_settings_row(2)) {
                             animations_enabled = !animations_enabled;
@@ -3172,6 +3312,17 @@ void gui_set_clock(int hour, int minute, int second, int day, int month, int yea
     clock_valid = 1;
     gui_request_redraw_rect(0, 0, (int)framebuffer_info()->width, TOPBAR_H);
 }
+
+#ifdef UNIT_TEST
+int gui_test_notification_count(void) { return notification_count; }
+int gui_test_notification_visible(void) { return notification_open && notifications_enabled; }
+int gui_test_window_minimized(int index) {
+    return index >= 0 && index < WINDOW_COUNT ? windows[index].minimized : 0;
+}
+int gui_test_window_visible(int index) {
+    return index >= 0 && index < WINDOW_COUNT ? windows[index].visible : 0;
+}
+#endif
 
 int gui_take_terminal_cursor(int* cursor_pos) {
     if (!cursor_request_pending || !cursor_pos) return 0;

@@ -137,3 +137,22 @@ Full ISO/QEMU boot testing still requires NASM, GRUB and QEMU, which are not ins
 - Overlapping windows preserve paint order; file and task lists scroll with matching keyboard, pointer and wheel hit targets.
 - Topbar network and mouse indicators reflect driver/link state, and 12-hour clocks include AM/PM.
 - Pull requests targeting `main` run the same host tests, ISO build, Multiboot2 validation and QEMU smoke test as main pushes; superseded runs for the same PR are cancelled.
+
+
+## GUI reliability and interaction pass
+
+- Notification popups now display the actual kernel notification ring instead of placeholder messages.
+- Escape, the close control, and clicking outside dismiss the popup without deleting saved notifications. Clear All dispatches a kernel action and clears the authoritative queue.
+- The top bar marks unread notifications, and opening the notification panel acknowledges the current count.
+- Minimized and closing windows retain their pre-transition geometry and maximize/snap state. Reopening from the dock restores that state, including when a close/minimize animation is interrupted.
+- Dock buttons now act as taskbar controls: selecting the focused running window minimizes it; selecting it again restores it. Small state markers distinguish focused, background, minimized, and closing windows.
+- The GUI action queue has additional capacity, and regression tests exercise notification dismissal/clearing and dock restore behavior.
+
+### External behavior references
+
+The interaction model was reviewed against the Haiku Deskbar/window lifecycle documentation and ToaruOS's panel/window-list implementation. These are behavior and architecture references only; no third-party implementation code was copied.
+
+- [Haiku window minimize/show semantics](https://api.haiku.nz/kits/interface/window.html)
+- [Haiku Deskbar and minimized application list](https://i18n.haiku-os.org/userguide/data/export/docs/userguide/en/deskbar.html)
+- [ToaruOS panel source](https://github.com/klange/toaruos/blob/master/apps/panel.c)
+- [ToaruOS window-list widget](https://github.com/klange/toaruos/blob/master/lib/panel_windowlist.c)
