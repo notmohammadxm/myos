@@ -26,7 +26,7 @@ The resulting ISO is created in this directory. Exact output name depends on liv
 ## Initial scope and limitations
 
 - amd64 only; legacy i386 remains separate.
-- Debian Trixie package repositories; the Linux kernel is installed as a Debian package, not copied into this repository.
+- Debian Trixie package repositories with explicit Debian mode and bootstrap/chroot/security mirrors; the Linux kernel is installed as a Debian package, not copied into this repository.
 - Plasma Wayland/KWin is the initial desktop. MyOS-specific branding and Qt/QML shell components are subsequent milestones.
 - This first image configuration is a build proof of concept, not an installer or stable release.
 - CI builds the image and runs a QEMU smoke test. The smoke test verifies a Plasma session, Firefox ESR, NetworkManager and successful HTTPS access through the virtual network adapter. This validates a QEMU NAT/Ethernet path; Wi-Fi and physical-hardware coverage still require real-device testing.
