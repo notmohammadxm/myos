@@ -29,7 +29,7 @@ log "MYOS_BROWSER_OK"
 
 session_ready=0
 attempt=0
-while [ "$attempt" -lt 90 ]; do
+while [ "$attempt" -lt 60 ]; do
     if pgrep -u user -x plasmashell >/dev/null 2>&1 &&
        pgrep -u user -x kwin_wayland >/dev/null 2>&1; then
         session_ready=1
@@ -43,8 +43,8 @@ log "MYOS_DESKTOP_OK"
 
 network_ready=0
 attempt=0
-while [ "$attempt" -lt 10 ]; do
-    if curl -fsS --connect-timeout 4 --max-time 10 \
+while [ "$attempt" -lt 6 ]; do
+    if curl -fsS --connect-timeout 3 --max-time 6 \
         https://deb.debian.org/debian/ -o /dev/null; then
         network_ready=1
         break
