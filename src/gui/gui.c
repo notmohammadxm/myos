@@ -2394,11 +2394,15 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     if (quick_settings_open) {
         if(event==GUI_KEY_ESCAPE){quick_settings_open=0;gui_request_redraw();return 1;}
         if(event=='1'||event=='2'||event=='3'){
-            if(event=='1')action_push(GUI_ACTION_THEME,0);
-            else if(event=='2')notifications_enabled=!notifications_enabled;
-            if(!notifications_enabled)notification_open=0;
-            else animations_enabled=!animations_enabled;
-            if(!animations_enabled)finish_all_window_animations();
+            if(event=='1') {
+                action_push(GUI_ACTION_THEME,0);
+            } else if(event=='2') {
+                notifications_enabled=!notifications_enabled;
+                if(!notifications_enabled)notification_open=0;
+            } else {
+                animations_enabled=!animations_enabled;
+                if(!animations_enabled)finish_all_window_animations();
+            }
             gui_request_redraw();return 1;
         }
         return 1;
