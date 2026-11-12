@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# MyOS Linux proof-of-concept image.
+# MyOS Linux amd64 live desktop image.
 # Run this script from linux/live-build after installing Debian live-build.
 lb config \
   --distribution trixie \
