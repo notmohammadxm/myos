@@ -6,3 +6,5 @@ printf '%s\n' 'sddm shared/default-x-display-manager select sddm' | debconf-set-
 
 systemctl enable NetworkManager.service
 systemctl enable NetworkManager-wait-online.service
+chmod 0755 /usr/local/sbin/myos-live-smoke
+systemctl enable myos-live-smoke.service
