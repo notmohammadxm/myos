@@ -28,7 +28,19 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           set -euo pipefail
-          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update
+          updated=0
+          for attempt in 1 2 3 4 5; do
+            if sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update; then
+              updated=1
+              break
+            fi
+            echo "Package index update failed; retrying in $((attempt * 10)) seconds..."
+            sleep $((attempt * 10))
+          done
+          if [ "$updated" -ne 1 ]; then
+            echo "::error::Unable to refresh package indexes after five attempts."
+            exit 1
+          fi
           for attempt in 1 2 3 4 5; do
             if sudo apt-get -o Acquire::Retries=5 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
               nasm gcc-multilib binutils xorriso mtools grub-pc-bin grub-common qemu-system-x86; then
