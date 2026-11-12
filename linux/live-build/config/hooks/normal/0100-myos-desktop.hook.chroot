@@ -2,4 +2,7 @@
 set -eu
 
 systemctl enable sddm.service
+printf '%s\n' 'sddm shared/default-x-display-manager select sddm' | debconf-set-selections
+
 systemctl enable NetworkManager.service
+systemctl enable NetworkManager-wait-online.service
