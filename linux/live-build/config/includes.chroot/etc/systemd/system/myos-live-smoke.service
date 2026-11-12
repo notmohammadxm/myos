@@ -1,0 +1,18 @@
+[Unit]
+Description=MyOS live desktop and network smoke test
+After=NetworkManager.service NetworkManager-wait-online.service sddm.service
+Wants=NetworkManager-wait-online.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/myos-live-smoke
+TimeoutStartSec=180
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyS0
+TTYReset=yes
+TTYVHangup=yes
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
