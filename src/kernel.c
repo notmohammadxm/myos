@@ -1235,7 +1235,7 @@ static void logs_gui_update(void) {
 }
 
 static void notifications_gui_update(void) {
-    gui_log_entry_t snapshot[NOTIFY_COUNT];
+    gui_log_entry_t snapshot[NOTIFY_COUNT] = {{0}};
     int count = notify_count;
     if (count > NOTIFY_COUNT) count = NOTIFY_COUNT;
     int start = (notify_count < NOTIFY_COUNT) ? 0 : notify_head;
