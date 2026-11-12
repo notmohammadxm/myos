@@ -6,7 +6,7 @@
 
 #define FONT_W FONT8X14_W
 #define FONT_H FONT8X14_H
-#define TERM_COLS 96
+#define TERM_COLS 128
 #define TERM_ROWS 48
 #define TERM_PAD 14
 #define TOPBAR_H 62
@@ -15,6 +15,7 @@
 #define MIN_WINDOW_W 260
 #define MIN_WINDOW_H 180
 #define WINDOW_COUNT 5
+#define GUI_ACTION_QUEUE_CAPACITY 16
 #define TITLE_DOUBLE_CLICK_TICKS 35u
 #define SNAP_ZONE 24
 #define RESIZE_ZONE 14
@@ -92,22 +93,26 @@ static char launcher_query[32];
 static int recent_apps[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
 static int taskmgr_open;
 static int taskmgr_selected;
+static int taskmgr_top;
 static int taskmgr_sort_mode;
 static gui_task_info_t task_data[8];
 static int task_count;
 static int task_order[8];
 static int filemgr_open;
 static int filemgr_selected;
+static int filemgr_top;
 static gui_file_info_t file_data[16];
 static int file_count;
 static int network_open;
 static gui_net_info_t network_status;
+static int mouse_available_state;
 static int clock_24h = 1;
 static int quick_settings_open;
 static int panic_open;
 static int panic_code;
 static int log_view_open;
 static int log_view_selected;
+static int log_view_top;
 static int log_view_count;
 static gui_log_entry_t log_view_data[32];
 static uint32_t splash_until;
@@ -121,13 +126,14 @@ static int calc_has_value;
 static int calc_replace_next;
 static int calc_error;
 static int term_view_top;
+static int term_view_left;
 static int term_view_rows;
 static int cursor_request_pending;
 static int cursor_request_pos;
 static int cursor_drawn_x;
 static int cursor_drawn_y;
 static int cursor_drawn_valid;
-static gui_action_t action_queue[4];
+static gui_action_t action_queue[GUI_ACTION_QUEUE_CAPACITY];
 static int action_head;
 static int action_tail;
 static int window_order[WINDOW_COUNT] = { 1, 2, 3, 4, 0 };
@@ -147,7 +153,7 @@ static size_t gui_strlen(const char* s) { size_t n = 0; while (s && s[n]) ++n; r
 static void gui_strcopy(char* dst, const char* src, int cap) { int i = 0; if (!dst || cap <= 0) return; while (src && src[i] && i < cap - 1) { dst[i] = src[i]; ++i; } dst[i] = 0; }
 
 static void action_push(int type, const char* value) {
-    int next = (action_head + 1) % 4;
+    int next = (action_head + 1) % GUI_ACTION_QUEUE_CAPACITY;
     if (next == action_tail) return;
     action_queue[action_head].type = type;
     action_queue[action_head].value = value;
@@ -156,7 +162,7 @@ static void action_push(int type, const char* value) {
 }
 
 static void action_push_arg(int type, int arg) {
-    int next = (action_head + 1) % 4;
+    int next = (action_head + 1) % GUI_ACTION_QUEUE_CAPACITY;
     if (next == action_tail) return;
     action_queue[action_head].type = type;
     action_queue[action_head].value = 0;
@@ -185,10 +191,10 @@ static uint32_t attr_color(uint8_t attr) {
 
 static void draw_char(int x, int y, char c, uint32_t color) {
     const uint8_t* glyph = font8x14_get(c);
-    for (int r = 0; r < FONT_H; ++r) {
+    for (int r = 0; r < FONT8X14_GLYPH_H; ++r) {
         uint8_t bits = glyph[r];
-        for (int col = 0; col < FONT_W; ++col) {
-            if (bits & (1u << (FONT_W - 1 - col)))
+        for (int col = 0; col < FONT8X14_GLYPH_W; ++col) {
+            if (bits & (1u << (FONT8X14_GLYPH_W - 1 - col)))
                 renderer_pixel(x + col, y + r, color);
         }
     }
@@ -412,12 +418,16 @@ static void layout_windows(void) {
     int screen_h = (int)f->height;
     int side_w = 334;
     int gap = 14;
+    int side_y = TOPBAR_H + 30;
+    int side_bottom = screen_h - FOOTER_H - 4;
+    int side_h = min_int(238, (side_bottom - side_y - gap) / 2);
+    if (side_h < MIN_WINDOW_H) side_h = MIN_WINDOW_H;
 
     window_set_initial(&windows[0], 24, TOPBAR_H + 30,
                        screen_w - side_w - 66, screen_h - TOPBAR_H - FOOTER_H - 42);
-    window_set_initial(&windows[1], screen_w - side_w - 24, TOPBAR_H + 30, side_w, 238);
+    window_set_initial(&windows[1], screen_w - side_w - 24, side_y, side_w, side_h);
     window_set_initial(&windows[2], screen_w - side_w - 24,
-                       TOPBAR_H + 30 + 238 + gap, side_w, 238);
+                       side_y + side_h + gap, side_w, side_h);
     window_set_initial(&windows[3], 228, TOPBAR_H + 78, 390, 410);
     window_set_initial(&windows[4], max_int(360, screen_w / 2 + 40),
                        TOPBAR_H + 100, 390, 410);
@@ -642,6 +652,43 @@ static void draw_sysinfo(const struct gui_window* w) {
     const framebuffer_info_t* f = framebuffer_info();
     int x = w->x + 18;
     int y = w->y + TITLE_H + 18;
+
+    if (w->h < 260) {
+        int col2 = x + w->w / 2;
+        draw_text(x, y, "SYSTEM", muted);
+        draw_text(x + 58, y, "MYOS 0.5", text);
+        draw_text(col2, y, "KERNEL", muted);
+        draw_text(col2 + 64, y, "I386", text);
+        y += 28;
+        draw_text(x, y, "DISPLAY", muted);
+        if (f) {
+            char mode[12];
+            int mw = (int)f->width, mh = (int)f->height;
+            int n = 0;
+            if (mw >= 1000) mode[n++] = (char)('0' + (mw / 1000) % 10);
+            mode[n++] = (char)('0' + (mw / 100) % 10);
+            mode[n++] = (char)('0' + (mw / 10) % 10);
+            mode[n++] = (char)('0' + mw % 10);
+            mode[n++] = 'x';
+            if (mh >= 1000) mode[n++] = (char)('0' + (mh / 1000) % 10);
+            mode[n++] = (char)('0' + (mh / 100) % 10);
+            mode[n++] = (char)('0' + (mh / 10) % 10);
+            mode[n++] = (char)('0' + mh % 10);
+            mode[n] = 0;
+            draw_text_clipped(x + 66, y, mode, success, col2 - x - 72);
+        }
+        draw_text(col2, y, "INPUT", muted);
+        draw_text(col2 + 50, y, "PS/2", success);
+        y += 28;
+        draw_text(x, y, "BOOT", muted);
+        draw_text(x + 48, y, "GRAPHICS", success);
+        draw_text(col2, y, "STATUS", muted);
+        draw_text(col2 + 56, y, "READY", success);
+        renderer_rect(x, y + 22, w->w - 36, 3, bg);
+        renderer_rect(x, y + 22, w->w - 82, 3, success);
+        return;
+    }
+
     draw_text(x, y, "SYSTEM", muted);
     draw_text(x + 112, y, "MYOS 0.5", text);
     y += 30;
@@ -666,9 +713,8 @@ static void draw_sysinfo(const struct gui_window* w) {
     y += 30;
     draw_text(x, y, "STATUS", muted);
     draw_text(x + 112, y, "ALL CORE SERVICES READY", success);
-    renderer_rect(x, y + 28, w->w - 36, 4, bg);
-    renderer_rect(x, y + 28, w->w - 82, 4, success);
-    draw_text(x, y + 42, "STABLE UI / PARTIAL PRESENT", accent);
+    renderer_rect(x, y + 16, w->w - 36, 4, bg);
+    renderer_rect(x, y + 16, w->w - 82, 4, success);
 }
 
 static void draw_toggle(int x, int y, int on) {
@@ -681,29 +727,39 @@ static void draw_settings(const struct gui_window* w) {
     if (!w->visible || w->minimized) return;
     int x = w->x + 18;
     int y = w->y + TITLE_H + 20;
+    int compact = w->h < 260;
     draw_text(x, y, "THEME", muted);
     draw_text(x + 94, y, theme_name, text);
     renderer_border(w->x + w->w - 72, y - 5, 54, 30, 1, accent);
     draw_text(w->x + w->w - 55, y + 3, ">", accent);
 
-    y += 46;
+    y += compact ? 38 : 46;
     draw_text(x, y, "NOTIFICATIONS", muted);
     draw_toggle(w->x + w->w - 80, y - 5, notifications_enabled);
     draw_text(w->x + w->w - 142, y + 2, notifications_enabled ? "ON" : "OFF", notifications_enabled ? success : muted);
 
-    y += 42;
+    y += compact ? 38 : 42;
     draw_text(x, y, "ANIMATIONS", muted);
     draw_toggle(w->x + w->w - 80, y - 5, animations_enabled);
     draw_text(w->x + w->w - 142, y + 2, animations_enabled ? "ON" : "OFF", animations_enabled ? success : muted);
 
-    y += 42;
-    draw_text(x, y, "POINTER", muted);
-    draw_text(x + 94, y, "PS2 OPTIMIZED", success);
+    if (compact) {
+        y += 34;
+        draw_text(x, y, "INPUT", muted);
+        draw_text(x + 64, y, "PS/2", success);
+        draw_text(x + 144, y, "SESSION LIVE", accent);
+    } else {
+        y += 42;
+        draw_text(x, y, "POINTER", muted);
+        draw_text(x + 94, y, "PS2 OPTIMIZED", success);
 
-    y += 38;
-    draw_text(x, y, "SESSION", muted);
-    draw_text(x + 94, y, "LIVE / NON-PERSISTENT", accent);
+        y += 38;
+        draw_text(x, y, "SESSION", muted);
+        draw_text(x + 94, y, "SETTINGS ACTIVE", accent);
+    }
 }
+
+static void make_clock_text(char out[12]);
 
 static void draw_monitor(const struct gui_window* w) {
     if (!w->visible || w->minimized) return;
@@ -723,13 +779,9 @@ static void draw_monitor(const struct gui_window* w) {
     draw_text(x, y + 30, "UPTIME", muted);
     draw_text(x + 94, y + 30, uptime, text);
     draw_text(x, y + 58, "CLOCK", muted);
-    if (clock_valid) {
-        char t[9];
-        t[0]=(char)('0'+clock_hour/10); t[1]=(char)('0'+clock_hour%10); t[2]=':';
-        t[3]=(char)('0'+clock_minute/10); t[4]=(char)('0'+clock_minute%10); t[5]=':';
-        t[6]=(char)('0'+clock_second/10); t[7]=(char)('0'+clock_second%10); t[8]=0;
-        draw_text(x + 94, y + 58, t, success);
-    } else draw_text(x + 94, y + 58, "--:--:--", warning);
+    char clock_text[12];
+    make_clock_text(clock_text);
+    draw_text(x + 94, y + 58, clock_text, clock_valid ? success : warning);
 
     draw_text(x, y + 86, "CURSOR", muted);
     char pos[18];
@@ -755,16 +807,27 @@ static void draw_monitor(const struct gui_window* w) {
     }
 }
 
-static void make_clock_text(char out[9]) {
+static void make_clock_text(char out[12]) {
     if (!out) return;
     if (!clock_valid) {
-        gui_strcopy(out, "--:--:--", 9);
+        gui_strcopy(out, "--:--:--", 12);
         return;
     }
     int hour = clock_hour;
     if (!clock_24h) {
+        int is_pm = hour >= 12;
         hour %= 12;
         if (hour == 0) hour = 12;
+        out[0] = (char)('0' + hour / 10);
+        out[1] = (char)('0' + hour % 10);
+        out[2] = ':';
+        out[3] = (char)('0' + clock_minute / 10);
+        out[4] = (char)('0' + clock_minute % 10);
+        out[5] = ' ';
+        out[6] = is_pm ? 'P' : 'A';
+        out[7] = 'M';
+        out[8] = 0;
+        return;
     }
     out[0]=(char)('0'+hour/10); out[1]=(char)('0'+hour%10); out[2]=':';
     out[3]=(char)('0'+clock_minute/10); out[4]=(char)('0'+clock_minute%10); out[5]=':';
@@ -814,7 +877,7 @@ static void draw_desktop_chrome(void) {
     const framebuffer_info_t* f = framebuffer_info();
     int w = (int)f->width;
     int h = (int)f->height;
-    char clock[9];
+    char clock[12];
     make_clock_text(clock);
 
     renderer_rect(0, 0, w, h, bg);
@@ -835,17 +898,20 @@ static void draw_desktop_chrome(void) {
     draw_text(78, 18, "MYOS", accent);
     draw_text(126, 18, "DESKTOP", muted);
 
+    uint32_t net_color = network_status.available
+        ? (network_status.link_up ? success : warning) : muted;
+    uint32_t mouse_color = mouse_available_state ? success : muted;
     draw_round_card(w - 536, 15, 86, 34, 12, bg, border);
-    draw_round_rect(w - 524, 25, 6, 6, 3, success);
-    draw_text(w - 512, 18, "NET", success);
+    draw_round_rect(w - 524, 25, 6, 6, 3, net_color);
+    draw_text(w - 512, 18, "NET", net_color);
 
     draw_round_card(w - 444, 15, 86, 34, 12, bg, border);
-    draw_round_rect(w - 432, 25, 6, 6, 3, success);
-    draw_text(w - 420, 18, "MOUSE", success);
+    draw_round_rect(w - 432, 25, 6, 6, 3, mouse_color);
+    draw_text(w - 420, 18, "MOUSE", mouse_color);
 
     draw_round_card(w - 352, 15, 86, 34, 12, bg, border);
-    draw_round_rect(w - 340, 25, 6, 6, 3, success);
-    draw_text(w - 328, 18, "CPU", success);
+    draw_round_rect(w - 340, 25, 6, 6, 3, accent);
+    draw_text(w - 328, 18, "I386", accent);
 
     draw_round_card(w - 260, 15, 82, 34, 12, bg, border);
     draw_text_centered(w - 260, 18, 82, clock, text);
@@ -962,7 +1028,7 @@ static int launcher_match_at(int ordinal) {
     int match = 0;
     for (int pos = 0; pos < 8; ++pos) {
         int index = recent_apps[pos];
-        if (index < 0 || index >= 7) continue;
+        if (index < 0 || index >= 8) continue;
         if (!launcher_contains(names[index], launcher_query) &&
             !launcher_contains(desc[index], launcher_query)) continue;
         if (match == ordinal) return index;
@@ -1060,6 +1126,13 @@ static void draw_launcher(void) {
     draw_text(x + 20, y + height - 22, "UP/DOWN SELECT   ENTER OPEN   ESC CLOSE", muted);
 }
 
+static int terminal_horizontal_offset(int visible_columns) {
+    if (focused_window != 0 || !input_active || tx < visible_columns) return 0;
+    int left = tx - visible_columns + 1;
+    int max_left = TERM_COLS - visible_columns;
+    return max_int(0, min_int(left, max_left));
+}
+
 static void draw_terminal_surface(const struct gui_window* w) {
     if (!w->visible || w->minimized) return;
     int inner_x = w->x + TERM_PAD;
@@ -1072,29 +1145,37 @@ static void draw_terminal_surface(const struct gui_window* w) {
     if (term_view_top < 0) term_view_top = 0;
     if (term_view_top > TERM_ROWS - term_view_rows) term_view_top = max_int(0, TERM_ROWS - term_view_rows);
 
+    term_view_left = terminal_horizontal_offset(cols);
+
     renderer_rect(w->x + 1, w->y + TITLE_H, w->w - 2, w->h - TITLE_H - 1, terminal_bg);
     for (int r = 0; r < term_view_rows; ++r) {
         int source_row = term_view_top + r;
         if (source_row < 0 || source_row >= TERM_ROWS) continue;
+        int row_left = (focused_window == 0 && input_active && source_row == input_y)
+            ? term_view_left : 0;
         for (int c = 0; c < cols; ++c) {
-            char ch = term[source_row][c];
+            int source_col = row_left + c;
+            if (source_col >= TERM_COLS) continue;
+            char ch = term[source_row][source_col];
             int selected = 0;
             if (source_row == input_y && selection_anchor >= 0 && selection_anchor != selection_cursor) {
                 int a = selection_anchor, b = selection_cursor;
                 if (a > b) { int t = a; a = b; b = t; }
-                selected = c >= input_x + a && c < input_x + b;
+                selected = source_col >= input_x + a && source_col < input_x + b;
             }
             if (selected) renderer_rect(inner_x + c * FONT_W, inner_y + r * FONT_H, FONT_W, FONT_H, accent);
             if (ch == ' ') continue;
-            draw_char(inner_x + c * FONT_W, inner_y + r * FONT_H, ch, selected ? terminal_bg : attr_color(term_attr[source_row][c]));
+            draw_char(inner_x + c * FONT_W, inner_y + r * FONT_H, ch,
+                      selected ? terminal_bg : attr_color(term_attr[source_row][source_col]));
         }
     }
 
     if (focused_window == 0 && input_active) {
         int view_y = ty - term_view_top;
-        int cx = inner_x + tx * FONT_W;
+        int cursor_col = tx - term_view_left;
+        int cx = inner_x + cursor_col * FONT_W;
         int cy = inner_y + view_y * FONT_H;
-        if (view_y >= 0 && view_y < term_view_rows)
+        if (view_y >= 0 && view_y < term_view_rows && cursor_col >= 0 && cursor_col < cols)
             renderer_rect(cx, cy + FONT_H - 2, FONT_W - 1, 2, accent);
     }
 }
@@ -1164,6 +1245,27 @@ static int32_t calc_parse_number(const char** p, int* error) {
 
 static int32_t calc_parse_factor(const char** p, int* error) {
     calc_skip(p);
+    const char* start = *p;
+    int negative = 0;
+    if (**p == '+' || **p == '-') {
+        negative = **p == '-';
+        ++*p;
+        calc_skip(p);
+        if (**p == '(') {
+            ++*p;
+            int32_t value = calc_parse_expr(p, error);
+            calc_skip(p);
+            if (**p != ')') { *error = 1; return 0; }
+            ++*p;
+            if (*error) return 0;
+            if (negative) {
+                if (value == (-2147483647 - 1)) { *error = 1; return 0; }
+                return -value;
+            }
+            return value;
+        }
+        *p = start; /* Numeric unary signs are handled by calc_parse_number. */
+    }
     if (**p == '(') {
         ++*p;
         int32_t v = calc_parse_expr(p, error);
@@ -1275,7 +1377,7 @@ int gui_test_calculate(const char* expression, int32_t* result) {
 static void draw_calculator(const struct gui_window* w) {
     if (!w->visible || w->minimized) return;
     int x = w->x + 18, y = w->y + TITLE_H + 16;
-    int bw = 78, bh = 48, gap = 8;
+    int bw = 78, bh = 42, gap = 6;
     renderer_rect(w->x + 14, y, w->w - 28, 62, terminal_bg);
     renderer_border(w->x + 14, y, w->w - 28, 62, 1, calc_error ? danger : border);
     draw_text(w->x + 24, y + 9, calc_error ? "ERROR" : "READY", calc_error ? danger : success);
@@ -1306,7 +1408,7 @@ static int point_in_calculator_key(int* key_index) {
     if (!key_index) return 0;
     const struct gui_window* w = &windows[3];
     int x = w->x + 18, y = w->y + TITLE_H + 16 + 76;
-    int bw = 78, bh = 48, gap = 8;
+    int bw = 78, bh = 42, gap = 6;
     int rx = mouse_x_pos - x, ry = mouse_y_pos - y;
     if (!inside_window(w, mouse_x_pos, mouse_y_pos) || rx < 0 || ry < 0) return 0;
     int col = rx / (bw + gap), row = ry / (bh + gap);
@@ -1410,42 +1512,92 @@ static void draw_quick_settings(void) {
     draw_text_centered(x + 16, y + 205, QUICK_W - 32, "OPEN SYSTEM MONITOR", bg);
 }
 
+static int log_viewer_geometry(int* out_x, int* out_y, int* out_width,
+                                int* out_height, int* out_rows) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return 0;
+    int width = 700, height = 430;
+    if ((int)f->width < width + 24) width = (int)f->width - 24;
+    if ((int)f->height < height + TOPBAR_H + FOOTER_H)
+        height = (int)f->height - TOPBAR_H - FOOTER_H - 24;
+    if (width < 240 || height < 240) return 0;
+    int rows = (height - 150) / 34;
+    if (rows > 12) rows = 12;
+    if (rows < 1) rows = 1;
+    if (out_x) *out_x = ((int)f->width - width) / 2;
+    if (out_y) *out_y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+    if (out_width) *out_width = width;
+    if (out_height) *out_height = height;
+    if (out_rows) *out_rows = rows;
+    return 1;
+}
+
+static void log_view_ensure_visible(void) {
+    int rows = 0;
+    if (!log_viewer_geometry(0, 0, 0, 0, &rows) || log_view_count <= 0) {
+        log_view_top = 0;
+        if (log_view_count <= 0) log_view_selected = 0;
+        return;
+    }
+    if (log_view_selected < log_view_top) log_view_top = log_view_selected;
+    if (log_view_selected >= log_view_top + rows)
+        log_view_top = log_view_selected - rows + 1;
+    log_view_top = max_int(0, min_int(log_view_top, max_int(0, log_view_count - rows)));
+}
+
+static int log_viewer_pointer_row(void) {
+    int x, y, width, height, rows;
+    if (!log_view_open || !log_viewer_geometry(&x, &y, &width, &height, &rows)) return -1;
+    if (mouse_x_pos < x + 18 || mouse_x_pos >= x + width - 18) return -1;
+    int rel_y = mouse_y_pos - (y + 78);
+    if (rel_y < 0 || rel_y >= rows * 34 || rel_y % 34 >= 30) return -1;
+    int index = log_view_top + rel_y / 34;
+    return index < log_view_count ? index : -1;
+}
+
+static int log_viewer_pointer_inside(void) {
+    int x, y, width, height;
+    if (!log_view_open || !log_viewer_geometry(&x, &y, &width, &height, 0)) return 0;
+    return mouse_x_pos >= x && mouse_x_pos < x + width &&
+           mouse_y_pos >= y && mouse_y_pos < y + height;
+}
+
 static void draw_log_viewer(void) {
     if (!log_view_open) return;
-    const framebuffer_info_t* f=framebuffer_info();
-    if (!f) return;
-    int width=700,height=430;
-    if ((int)f->width<width+24) width=(int)f->width-24;
-    if ((int)f->height<height+TOPBAR_H+FOOTER_H) height=(int)f->height-TOPBAR_H-FOOTER_H-24;
-    if (height<320) height=320;
-    int x=((int)f->width-width)/2;
-    int y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-height)/2;
-    draw_round_card(x+7,y+11,width,height,20,bg,border);
-    draw_round_card(x,y,width,height,20,panel2,accent);
-    draw_text(x+22,y+18,"SYSTEM LOGS",accent);
-    draw_text(x+22,y+40,"RECENT KERNEL EVENTS",muted);
-    int rows=(height-150)/34; if(rows>12)rows=12;
-    for(int row=0;row<rows&&row<log_view_count;++row){
-        int yy=y+78+row*34;
-        int active=row==log_view_selected;
-        draw_round_card(x+18,yy-2,width-36,30,9,active?panel:bg,active?accent:border);
-        draw_round_rect(x+30,yy+8,6,6,3,active?accent:muted);
-        draw_text_clipped(x+48,yy+5,log_view_data[row].text,active?text:muted,width-82);
+    int x, y, width, height, rows;
+    if (!log_viewer_geometry(&x, &y, &width, &height, &rows)) return;
+    log_view_ensure_visible();
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
+    draw_round_card(x, y, width, height, 20, panel2, accent);
+    draw_text(x + 22, y + 18, "SYSTEM LOGS", accent);
+    draw_text(x + 22, y + 40, "RECENT KERNEL EVENTS", muted);
+    for (int row = 0; row < rows; ++row) {
+        int index = log_view_top + row;
+        if (index >= log_view_count) break;
+        int yy = y + 78 + row * 34;
+        int active = index == log_view_selected;
+        draw_round_card(x + 18, yy - 2, width - 36, 30, 9,
+                        active ? panel : bg, active ? accent : border);
+        draw_round_rect(x + 30, yy + 8, 6, 6, 3, active ? accent : muted);
+        draw_text_clipped(x + 48, yy + 5, log_view_data[index].text,
+                          active ? text : muted, width - 82);
     }
-    draw_text(x+20,y+height-34,"UP/DOWN SELECT   ESC CLOSE",muted);
+    draw_text(x + 20, y + height - 34, "UP/DOWN SELECT   ESC CLOSE", muted);
 }
 
 void gui_log_set_data(const gui_log_entry_t* entries,int count){
     if(!ready||!entries)return;
     log_view_count=max_int(0,min_int(count,32));
     for(int i=0;i<log_view_count;++i)log_view_data[i]=entries[i];
-    if(log_view_selected>=log_view_count)log_view_selected=max_int(0,log_view_count-1);
-    if(log_view_open)gui_request_redraw();
+    if (log_view_selected >= log_view_count)
+        log_view_selected = max_int(0, log_view_count - 1);
+    log_view_ensure_visible();
+    if (log_view_open) gui_request_redraw();
 }
 
 void gui_log_open(void){
     if(!ready)return;
-    log_view_open=1;log_view_selected=0;
+    log_view_open=1;log_view_selected=0;log_view_top=0;
     launcher_open=0;quick_settings_open=0;notification_open=0;power_open=0;
     taskmgr_open=0;filemgr_open=0;network_open=0;focused_window=-1;
     gui_request_redraw();
@@ -1503,7 +1655,12 @@ static void draw_network_manager(void) {
 void gui_network_set_status(const gui_net_info_t* status) {
     if (!ready || !status) return;
     network_status = *status;
-    if (network_open) gui_request_redraw();
+    if (network_open) {
+        gui_request_redraw();
+    } else {
+        const framebuffer_info_t* f = framebuffer_info();
+        if (f) gui_request_redraw_rect((int)f->width - 540, 9, 176, 46);
+    }
 }
 
 void gui_network_open(void) {
@@ -1535,44 +1692,77 @@ static int network_pointer_ping(void) {
            mouse_y_pos >= y + height - 52 && mouse_y_pos < y + height - 22;
 }
 
-static void draw_task_manager(void) {
-    if (!taskmgr_open) return;
+static int taskmgr_geometry(int* out_x, int* out_y, int* out_width,
+                            int* out_height, int* out_rows) {
     const framebuffer_info_t* f = framebuffer_info();
-    if (!f) return;
+    if (!f) return 0;
     int width = 720, height = 430;
     if ((int)f->width < width + 24) width = (int)f->width - 24;
     if ((int)f->height < height + TOPBAR_H + FOOTER_H)
         height = (int)f->height - TOPBAR_H - FOOTER_H - 24;
     if (height < 320) height = 320;
-    int x = ((int)f->width - width) / 2;
-    int y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+    int rows = (height - 148) / 34;
+    if (rows > 8) rows = 8;
+    if (rows < 1) rows = 1;
+    if (out_x) *out_x = ((int)f->width - width) / 2;
+    if (out_y) *out_y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+    if (out_width) *out_width = width;
+    if (out_height) *out_height = height;
+    if (out_rows) *out_rows = rows;
+    return 1;
+}
+
+static void taskmgr_ensure_visible(void) {
+    int rows = 0;
+    if (!taskmgr_geometry(0, 0, 0, 0, &rows) || task_count <= 0) {
+        taskmgr_top = 0;
+        if (task_count <= 0) taskmgr_selected = 0;
+        return;
+    }
+    if (taskmgr_selected < 0) taskmgr_selected = 0;
+    if (taskmgr_selected >= task_count) taskmgr_selected = task_count - 1;
+    if (taskmgr_selected < taskmgr_top) taskmgr_top = taskmgr_selected;
+    if (taskmgr_selected >= taskmgr_top + rows)
+        taskmgr_top = taskmgr_selected - rows + 1;
+    taskmgr_top = max_int(0, min_int(taskmgr_top, max_int(0, task_count - rows)));
+}
+
+static void draw_task_manager(void) {
+    if (!taskmgr_open) return;
+    int x, y, width, height, rows;
+    if (!taskmgr_geometry(&x, &y, &width, &height, &rows)) return;
+    taskmgr_ensure_visible();
     draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
     draw_round_card(x, y, width, height, 20, panel2, accent);
     draw_text(x + 22, y + 18, "TASK MANAGER", accent);
     draw_text(x + 22, y + 40, "ROUND ROBIN KERNEL TASKS", muted);
     const char* headers[6] = { "PID", "NAME", "STATE", "CPU", "MEM", "PRIO" };
     int cols[6] = { 24, 72, 286, 490, 566, 640 };
-    for (int i=0;i<6;++i) draw_text(x+cols[i],y+72,headers[i],muted);
-    draw_soft_divider(x+20,y+94,width-40,border);
-    int rows=(height-170)/34; if(rows>8)rows=8;
-    for(int row=0;row<rows && row<task_count;++row){
-        int oi=task_order[row]; if(oi<0||oi>=task_count)continue;
-        int yy=y+102+row*34; int active=row==taskmgr_selected;
-        draw_round_card(x+18,yy-2,width-36,30,9,active?panel:bg,active?accent:border);
-        draw_uint_text(x+cols[0],yy+5,(uint32_t)task_data[oi].pid,active?text:muted);
-        draw_text_clipped(x+cols[1],yy+5,task_data[oi].name,active?text:muted,196);
-        draw_text_clipped(x+cols[2],yy+5,task_data[oi].state,active?text:muted,174);
-        draw_uint_text(x+cols[3],yy+5,(uint32_t)task_data[oi].cpu_percent,success);
-        draw_text(x+cols[3]+24,yy+5,"%",success);
-        draw_uint_text(x+cols[4],yy+5,(uint32_t)task_data[oi].memory_kib,text);
-        draw_text(x+cols[4]+32,yy+5,"K",text);
-        draw_uint_text(x+cols[5],yy+5,(uint32_t)task_data[oi].priority,warning);
+    for (int i = 0; i < 6; ++i) draw_text(x + cols[i], y + 72, headers[i], muted);
+    draw_soft_divider(x + 20, y + 94, width - 40, border);
+    for (int row = 0; row < rows; ++row) {
+        int index = taskmgr_top + row;
+        if (index >= task_count) break;
+        int oi = task_order[index];
+        if (oi < 0 || oi >= task_count) continue;
+        int yy = y + 102 + row * 34;
+        int active = index == taskmgr_selected;
+        draw_round_card(x + 18, yy - 2, width - 36, 30, 9,
+                        active ? panel : bg, active ? accent : border);
+        draw_uint_text(x + cols[0], yy + 5, (uint32_t)task_data[oi].pid, active ? text : muted);
+        draw_text_clipped(x + cols[1], yy + 5, task_data[oi].name, active ? text : muted, 196);
+        draw_text_clipped(x + cols[2], yy + 5, task_data[oi].state, active ? text : muted, 174);
+        draw_uint_text(x + cols[3], yy + 5, (uint32_t)task_data[oi].cpu_percent, success);
+        draw_text(x + cols[3] + 24, yy + 5, "%", success);
+        draw_uint_text(x + cols[4], yy + 5, (uint32_t)task_data[oi].memory_kib, text);
+        draw_text(x + cols[4] + 32, yy + 5, "K", text);
+        draw_uint_text(x + cols[5], yy + 5, (uint32_t)task_data[oi].priority, warning);
     }
-    draw_round_card(x+18,y+height-78,106,30,10,bg,border);
-    draw_round_card(x+132,y+height-78,106,30,10,bg,border);
-    draw_text_centered(x+18,y+height-71,106,"TERMINATE",danger);
-    draw_text_centered(x+132,y+height-71,106,"RESTART",success);
-    draw_text(x+258,y+height-71,"C CPU  M MEMORY  N PID  ESC CLOSE",muted);
+    draw_round_card(x + 18, y + height - 52, 106, 30, 10, bg, border);
+    draw_round_card(x + 132, y + height - 52, 106, 30, 10, bg, border);
+    draw_text_centered(x + 18, y + height - 45, 106, "TERMINATE", danger);
+    draw_text_centered(x + 132, y + height - 45, 106, "RESTART", success);
+    draw_text(x + 258, y + height - 45, "C CPU  M MEMORY  N PID  ESC CLOSE", muted);
 }
 
 static void taskmgr_sort_data(void) {
@@ -1586,6 +1776,7 @@ static void taskmgr_sort_data(void) {
         if(swap){int t=task_order[i];task_order[i]=task_order[j];task_order[j]=t;}
     }
     if(taskmgr_selected>=task_count)taskmgr_selected=max_int(0,task_count-1);
+    taskmgr_ensure_visible();
 }
 
 void gui_taskmgr_set_data(const gui_task_info_t* tasks,int count){
@@ -1598,7 +1789,7 @@ void gui_taskmgr_set_data(const gui_task_info_t* tasks,int count){
 
 void gui_taskmgr_open(void){
     if(!ready)return;
-    taskmgr_open=1; taskmgr_selected=0; taskmgr_sort_mode=0;
+    taskmgr_open=1; taskmgr_selected=0; taskmgr_top=0; taskmgr_sort_mode=0;
     launcher_open=0; quick_settings_open=0; notification_open=0; power_open=0; filemgr_open=0;
     focused_window=-1;
     taskmgr_sort_data(); gui_request_redraw();
@@ -1606,65 +1797,102 @@ void gui_taskmgr_open(void){
 
 static void gui_taskmgr_close(void){taskmgr_open=0;notification_open=0;gui_request_redraw();}
 
-static int taskmgr_pointer_row(void){
-    const framebuffer_info_t* f=framebuffer_info(); if(!f||!taskmgr_open)return -1;
-    int w=720,h=430;
-    if((int)f->width<w+24)w=(int)f->width-24;
-    if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
-    if(h<320)h=320;
-    int x=((int)f->width-w)/2,y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
-    if(mouse_x_pos<x+18||mouse_x_pos>=x+w-18||mouse_y_pos<y+100)return -1;
-    int row=(mouse_y_pos-y-100)/34;
-    if(row<0||row>=task_count||row>=8||(mouse_y_pos-y-100)%34>=30)return -1;
-    return row;
+static int taskmgr_pointer_row(void) {
+    int x, y, width, height, rows;
+    if (!taskmgr_open || !taskmgr_geometry(&x, &y, &width, &height, &rows)) return -1;
+    if (mouse_x_pos < x + 18 || mouse_x_pos >= x + width - 18) return -1;
+    int rel_y = mouse_y_pos - (y + 100);
+    if (rel_y < 0 || rel_y >= rows * 34 || rel_y % 34 >= 30) return -1;
+    int index = taskmgr_top + rel_y / 34;
+    return index < task_count ? index : -1;
 }
 
-static int taskmgr_pointer_button(void){
-    const framebuffer_info_t* f=framebuffer_info(); if(!f||!taskmgr_open)return 0;
-    int w=720,h=430;
-    if((int)f->width<w+24)w=(int)f->width-24;
-    if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
-    if(h<320)return 0;
-    int x=((int)f->width-w)/2,y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
-    if(mouse_y_pos<y+h-78||mouse_y_pos>=y+h-48)return 0;
-    if(mouse_x_pos>=x+18&&mouse_x_pos<x+124)return 1;
-    if(mouse_x_pos>=x+132&&mouse_x_pos<x+238)return 2;
+static int taskmgr_pointer_inside(void) {
+    int x, y, width, height;
+    if (!taskmgr_open || !taskmgr_geometry(&x, &y, &width, &height, 0)) return 0;
+    return mouse_x_pos >= x && mouse_x_pos < x + width &&
+           mouse_y_pos >= y && mouse_y_pos < y + height;
+}
+
+static int taskmgr_pointer_button(void) {
+    int x, y, width, height;
+    if (!taskmgr_open || !taskmgr_geometry(&x, &y, &width, &height, 0)) return 0;
+    if (mouse_y_pos < y + height - 52 || mouse_y_pos >= y + height - 22) return 0;
+    if (mouse_x_pos >= x + 18 && mouse_x_pos < x + 124) return 1;
+    if (mouse_x_pos >= x + 132 && mouse_x_pos < x + 238) return 2;
     return 0;
 }
 
-static void draw_file_manager(void) {
-    if(!filemgr_open)return;
-    const framebuffer_info_t* f=framebuffer_info(); if(!f)return;
-    int width=760,height=440;
-    if((int)f->width<width+24)width=(int)f->width-24;
-    if((int)f->height<height+TOPBAR_H+FOOTER_H)height=(int)f->height-TOPBAR_H-FOOTER_H-24;
-    if(height<330)height=330;
-    int x=((int)f->width-width)/2;
-    int y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-height)/2;
-    draw_round_card(x+7,y+11,width,height,20,bg,border);
-    draw_round_card(x,y,width,height,20,panel2,accent);
-    draw_text(x+22,y+18,"FILES",accent);
-    draw_text(x+22,y+40,"RAMFS /",muted);
-    draw_round_card(x+18,y+62,width-36,38,11,bg,border);
-    draw_text(x+32,y+73,"/home",text);
-    draw_text(x+width-96,y+73,"ROOT",accent);
-    int rows=(height-150)/34; if(rows>10)rows=10;
-    for(int row=0;row<rows&&row<file_count;++row){
-        int yy=y+110+row*34,active=row==filemgr_selected;
-        draw_round_card(x+18,yy-2,width-36,30,9,active?panel:bg,active?accent:border);
-        if(file_data[row].directory)draw_icon_system(x+30,yy+6,active?accent:warning);
-        else draw_icon_terminal(x+30,yy+6,active?accent:muted);
-        draw_text_clipped(x+64,yy+5,file_data[row].name,active?text:muted,430);
-        if(file_data[row].directory)draw_text(x+width-112,yy+5,"DIR",warning);
-        else {draw_uint_text(x+width-112,yy+5,file_data[row].size,muted);draw_text(x+width-72,yy+5,"B",muted);}
+static int filemgr_geometry(int* out_x, int* out_y, int* out_width,
+                            int* out_height, int* out_rows) {
+    const framebuffer_info_t* f = framebuffer_info();
+    if (!f) return 0;
+    int width = 760, height = 440;
+    if ((int)f->width < width + 24) width = (int)f->width - 24;
+    if ((int)f->height < height + TOPBAR_H + FOOTER_H)
+        height = (int)f->height - TOPBAR_H - FOOTER_H - 24;
+    if (height < 330) height = 330;
+    int rows = (height - 156) / 34;
+    if (rows > 10) rows = 10;
+    if (rows < 1) rows = 1;
+    if (out_x) *out_x = ((int)f->width - width) / 2;
+    if (out_y) *out_y = TOPBAR_H + ((int)f->height - TOPBAR_H - FOOTER_H - height) / 2;
+    if (out_width) *out_width = width;
+    if (out_height) *out_height = height;
+    if (out_rows) *out_rows = rows;
+    return 1;
+}
+
+static void filemgr_ensure_visible(void) {
+    int rows = 0;
+    if (!filemgr_geometry(0, 0, 0, 0, &rows) || file_count <= 0) {
+        filemgr_top = 0;
+        if (file_count <= 0) filemgr_selected = 0;
+        return;
     }
-    draw_round_card(x+18,y+height-78,94,30,10,bg,border);
-    draw_round_card(x+120,y+height-78,94,30,10,bg,border);
-    draw_round_card(x+222,y+height-78,94,30,10,bg,border);
-    draw_text_centered(x+18,y+height-71,94,"NEW FILE",success);
-    draw_text_centered(x+120,y+height-71,94,"NEW FOLDER",warning);
-    draw_text_centered(x+222,y+height-71,94,"DELETE",danger);
-    draw_text(x+336,y+height-71,"ENTER OPEN   ESC CLOSE",muted);
+    if (filemgr_selected < 0) filemgr_selected = 0;
+    if (filemgr_selected >= file_count) filemgr_selected = file_count - 1;
+    if (filemgr_selected < filemgr_top) filemgr_top = filemgr_selected;
+    if (filemgr_selected >= filemgr_top + rows)
+        filemgr_top = filemgr_selected - rows + 1;
+    filemgr_top = max_int(0, min_int(filemgr_top, max_int(0, file_count - rows)));
+}
+
+static void draw_file_manager(void) {
+    if (!filemgr_open) return;
+    int x, y, width, height, rows;
+    if (!filemgr_geometry(&x, &y, &width, &height, &rows)) return;
+    filemgr_ensure_visible();
+    draw_round_card(x + 7, y + 11, width, height, 20, bg, border);
+    draw_round_card(x, y, width, height, 20, panel2, accent);
+    draw_text(x + 22, y + 18, "FILES", accent);
+    draw_text(x + 22, y + 40, "FILESYSTEM /", muted);
+    draw_round_card(x + 18, y + 62, width - 36, 38, 11, bg, border);
+    draw_text(x + 32, y + 73, "/home", text);
+    draw_text(x + width - 96, y + 73, "ROOT", accent);
+    for (int row = 0; row < rows; ++row) {
+        int index = filemgr_top + row;
+        if (index >= file_count) break;
+        int yy = y + 110 + row * 34;
+        int active = index == filemgr_selected;
+        draw_round_card(x + 18, yy - 2, width - 36, 30, 9,
+                        active ? panel : bg, active ? accent : border);
+        if (file_data[index].directory) draw_icon_system(x + 30, yy + 6, active ? accent : warning);
+        else draw_icon_terminal(x + 30, yy + 6, active ? accent : muted);
+        draw_text_clipped(x + 64, yy + 5, file_data[index].name, active ? text : muted, 430);
+        if (file_data[index].directory) draw_text(x + width - 112, yy + 5, "DIR", warning);
+        else {
+            draw_uint_text(x + width - 112, yy + 5, file_data[index].size, muted);
+            draw_text(x + width - 72, yy + 5, "B", muted);
+        }
+    }
+    draw_round_card(x + 18, y + height - 52, 94, 30, 10, bg, border);
+    draw_round_card(x + 120, y + height - 52, 94, 30, 10, bg, border);
+    draw_round_card(x + 222, y + height - 52, 94, 30, 10, bg, border);
+    draw_text_centered(x + 18, y + height - 45, 94, "NEW FILE", success);
+    draw_text_centered(x + 120, y + height - 45, 94, "NEW FOLDER", warning);
+    draw_text_centered(x + 222, y + height - 45, 94, "DELETE", danger);
+    draw_text(x + 336, y + height - 45, "ENTER OPEN   ESC CLOSE", muted);
 }
 
 void gui_filemgr_set_data(const gui_file_info_t* files,int count){
@@ -1672,42 +1900,43 @@ void gui_filemgr_set_data(const gui_file_info_t* files,int count){
     file_count=max_int(0,min_int(count,16));
     for(int i=0;i<file_count;++i)file_data[i]=files[i];
     if(filemgr_selected>=file_count)filemgr_selected=max_int(0,file_count-1);
+    filemgr_ensure_visible();
     if(filemgr_open)gui_request_redraw();
 }
 
 void gui_filemgr_open(void){
     if(!ready)return;
-    filemgr_open=1;filemgr_selected=0;
+    filemgr_open=1;filemgr_selected=0;filemgr_top=0;
     launcher_open=0;quick_settings_open=0;notification_open=0;power_open=0;taskmgr_open=0;focused_window=-1;
     gui_request_redraw();
 }
 
 static void gui_filemgr_close(void){filemgr_open=0;notification_open=0;gui_request_redraw();}
 
-static int filemgr_pointer_row(void){
-    const framebuffer_info_t* f=framebuffer_info();if(!f||!filemgr_open)return -1;
-    int w=760,h=440;
-    if((int)f->width<w+24)w=(int)f->width-24;
-    if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
-    if(h<330)h=330;
-    int x=((int)f->width-w)/2,y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
-    if(mouse_x_pos<x+18||mouse_x_pos>=x+w-18||mouse_y_pos<y+108)return -1;
-    int row=(mouse_y_pos-y-108)/34;
-    if(row<0||row>=file_count||row>=10||(mouse_y_pos-y-108)%34>=30)return -1;
-    return row;
+static int filemgr_pointer_row(void) {
+    int x, y, width, height, rows;
+    if (!filemgr_open || !filemgr_geometry(&x, &y, &width, &height, &rows)) return -1;
+    if (mouse_x_pos < x + 18 || mouse_x_pos >= x + width - 18) return -1;
+    int rel_y = mouse_y_pos - (y + 108);
+    if (rel_y < 0 || rel_y >= rows * 34 || rel_y % 34 >= 30) return -1;
+    int index = filemgr_top + rel_y / 34;
+    return index < file_count ? index : -1;
 }
 
-static int filemgr_pointer_button(void){
-    const framebuffer_info_t* f=framebuffer_info();if(!f||!filemgr_open)return 0;
-    int w=760,h=440;
-    if((int)f->width<w+24)w=(int)f->width-24;
-    if((int)f->height<h+TOPBAR_H+FOOTER_H)h=(int)f->height-TOPBAR_H-FOOTER_H-24;
-    if(h<330)return 0;
-    int x=((int)f->width-w)/2,y=TOPBAR_H+((int)f->height-TOPBAR_H-FOOTER_H-h)/2;
-    if(mouse_y_pos<y+h-78||mouse_y_pos>=y+h-48)return 0;
-    if(mouse_x_pos>=x+18&&mouse_x_pos<x+112)return 1;
-    if(mouse_x_pos>=x+120&&mouse_x_pos<x+214)return 2;
-    if(mouse_x_pos>=x+222&&mouse_x_pos<x+316)return 3;
+static int filemgr_pointer_inside(void) {
+    int x, y, width, height;
+    if (!filemgr_open || !filemgr_geometry(&x, &y, &width, &height, 0)) return 0;
+    return mouse_x_pos >= x && mouse_x_pos < x + width &&
+           mouse_y_pos >= y && mouse_y_pos < y + height;
+}
+
+static int filemgr_pointer_button(void) {
+    int x, y, width, height;
+    if (!filemgr_open || !filemgr_geometry(&x, &y, &width, &height, 0)) return 0;
+    if (mouse_y_pos < y + height - 52 || mouse_y_pos >= y + height - 22) return 0;
+    if (mouse_x_pos >= x + 18 && mouse_x_pos < x + 112) return 1;
+    if (mouse_x_pos >= x + 120 && mouse_x_pos < x + 214) return 2;
+    if (mouse_x_pos >= x + 222 && mouse_x_pos < x + 316) return 3;
     return 0;
 }
 
@@ -1725,20 +1954,37 @@ static void draw_power_menu(void) {
     draw_text_centered(x + 14, y + 68, 104, "REBOOT", warning);
     draw_text_centered(x + 132, y + 68, 104, "SHUTDOWN", danger);
 }
+/* High-contrast 10x18 pointer: dark outline, light body and a restrained
+ * cyan highlight. The hotspot remains the upper-left pixel. */
 static void draw_cursor_framebuffer(int x, int y) {
-    static const uint8_t shape[17][2] = {
-        {0,0},{0,1},{0,2},{0,3},{0,4},{0,5},{0,6},{0,7},{0,8},
-        {1,8},{2,10},{3,12},{4,15},{5,15},{5,12},{4,10},{3,8}
+    static const uint16_t shape[18] = {
+        0x200u, 0x300u, 0x380u, 0x3C0u, 0x3E0u, 0x3F0u,
+        0x3F8u, 0x3FCu, 0x3FEu, 0x3FFu, 0x3E0u, 0x370u,
+        0x338u, 0x31Cu, 0x30Eu, 0x307u, 0x303u, 0x301u
     };
-    for (unsigned i = 0; i < sizeof(shape)/sizeof(shape[0]); ++i)
-        framebuffer_pixel(x + shape[i][0] + 1, y + shape[i][1] + 1, bg);
-    for (unsigned i = 0; i < sizeof(shape)/sizeof(shape[0]); ++i)
-        framebuffer_pixel(x + shape[i][0], y + shape[i][1], text);
+    const uint32_t outline = framebuffer_make_color(3, 8, 15);
+    for (int row = 0; row < 18; ++row) {
+        for (int col = 0; col < 10; ++col) {
+            if (!(shape[row] & (uint16_t)(1u << (9 - col)))) continue;
+            framebuffer_pixel(x + col + 2, y + row + 2, outline);
+            for (int oy = -1; oy <= 1; ++oy)
+                for (int ox = -1; ox <= 1; ++ox)
+                    if (ox || oy)
+                        framebuffer_pixel(x + col + ox, y + row + oy, outline);
+        }
+    }
+    for (int row = 0; row < 18; ++row) {
+        for (int col = 0; col < 10; ++col) {
+            if (!(shape[row] & (uint16_t)(1u << (9 - col)))) continue;
+            uint32_t fill = (col == 1 && row >= 3 && row <= 8) ? accent : text;
+            framebuffer_pixel(x + col, y + row, fill);
+        }
+    }
 }
 
 static void update_cursor_overlay(void) {
-    const int cursor_w = 7;
-    const int cursor_h = 17;
+    const int cursor_w = 12;
+    const int cursor_h = 20;
     if (cursor_drawn_valid &&
         (cursor_drawn_x != mouse_x_pos || cursor_drawn_y != mouse_y_pos)) {
         renderer_present_rect(cursor_drawn_x, cursor_drawn_y, cursor_w, cursor_h);
@@ -1751,6 +1997,12 @@ static void update_cursor_overlay(void) {
 
 static int point_in_launcher_button(void) {
     return mouse_x_pos >= 14 && mouse_x_pos < 66 && mouse_y_pos >= 11 && mouse_y_pos < 49;
+}
+
+static int point_in_launcher_search(void) {
+    return launcher_open && mouse_x_pos >= 36 &&
+           mouse_x_pos < 18 + LAUNCHER_W - 18 &&
+           mouse_y_pos >= TOPBAR_H + 72 && mouse_y_pos < TOPBAR_H + 110;
 }
 
 static int point_in_launcher_item(int* item) {
@@ -1841,14 +2093,12 @@ static int point_in_power_button(int which) {
 static int point_in_settings_row(int row) {
     const struct gui_window* w = &windows[2];
     int y = w->y + TITLE_H + 20;
+    int step1 = w->h < 260 ? 38 : 46;
+    int step2 = w->h < 260 ? 38 : 42;
     int row_h = 34;
     if (row < 0 || row > 2) return 0;
-    if (row == 0) return mouse_x_pos >= w->x + 8 && mouse_x_pos < w->x + w->w - 8 &&
-                         mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
-    y += 46;
-    if (row == 1) return mouse_x_pos >= w->x + 8 && mouse_x_pos < w->x + w->w - 8 &&
-                         mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
-    y += 42;
+    if (row == 1) y += step1;
+    else if (row == 2) y += step1 + step2;
     return mouse_x_pos >= w->x + 8 && mouse_x_pos < w->x + w->w - 8 &&
            mouse_y_pos >= y - 8 && mouse_y_pos < y + row_h;
 }
@@ -1933,9 +2183,20 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
     if (!ready) return 0;
 
     if (log_view_open) {
-        if (event==GUI_KEY_ESCAPE){gui_log_close();return 1;}
-        if(event==GUI_KEY_UP){if(log_view_count>0)log_view_selected=(log_view_selected+log_view_count-1)%log_view_count;gui_request_redraw();return 1;}
-        if(event==GUI_KEY_DOWN){if(log_view_count>0)log_view_selected=(log_view_selected+1)%log_view_count;gui_request_redraw();return 1;}
+        if (event == GUI_KEY_ESCAPE) { gui_log_close(); return 1; }
+        if (event == GUI_KEY_UP && log_view_count > 0) {
+            --log_view_selected;
+            if (log_view_selected < 0) log_view_selected = log_view_count - 1;
+            log_view_ensure_visible();
+            gui_request_redraw();
+            return 1;
+        }
+        if (event == GUI_KEY_DOWN && log_view_count > 0) {
+            log_view_selected = (log_view_selected + 1) % log_view_count;
+            log_view_ensure_visible();
+            gui_request_redraw();
+            return 1;
+        }
         return 1;
     }
 
@@ -1952,10 +2213,12 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
         if (event == GUI_KEY_ESCAPE) { gui_filemgr_close(); return 1; }
         if (event == GUI_KEY_UP) {
             if (file_count > 0) filemgr_selected=(filemgr_selected+file_count-1)%file_count;
+            filemgr_ensure_visible();
             gui_request_redraw(); return 1;
         }
         if (event == GUI_KEY_DOWN) {
             if (file_count > 0) filemgr_selected=(filemgr_selected+1)%file_count;
+            filemgr_ensure_visible();
             gui_request_redraw(); return 1;
         }
         if (event == '\n' || event == '\r') {
@@ -1977,10 +2240,12 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
         if (event == GUI_KEY_ESCAPE) { gui_taskmgr_close(); return 1; }
         if (event == GUI_KEY_UP) {
             if (task_count > 0) taskmgr_selected=(taskmgr_selected+task_count-1)%task_count;
+            taskmgr_ensure_visible();
             gui_request_redraw(); return 1;
         }
         if (event == GUI_KEY_DOWN) {
             if (task_count > 0) taskmgr_selected=(taskmgr_selected+1)%task_count;
+            taskmgr_ensure_visible();
             gui_request_redraw(); return 1;
         }
         if (event == 'c') taskmgr_sort_mode=1;
@@ -2041,7 +2306,7 @@ static int gui_keyboard_event_internal(int event, int ctrl, int shift) {
         if(event==8||event==127||event==GUI_KEY_DELETE){calculator_backspace();gui_request_redraw();return 1;}
         if(event>=32&&event<127){
             char ch=(char)event;
-            if((ch>='0'&&ch<='9')||ch=='+'||ch=='-'||ch=='*'||ch=='/'||ch=='%'||ch=='('||ch==')'||ch=='.'){
+            if((ch>='0'&&ch<='9')||ch=='+'||ch=='-'||ch=='*'||ch=='/'||ch=='%'||ch=='('||ch==')'){
                 calculator_append_char(ch);gui_request_redraw();return 1;
             }
         }
@@ -2066,6 +2331,7 @@ void gui_init(void) {
     selection_anchor = -1;
     selection_cursor = 0;
     term_view_top = 0;
+    term_view_left = 0;
     term_view_rows = 1;
     mouse_x_pos = (int)framebuffer_info()->width / 2;
     mouse_y_pos = (int)framebuffer_info()->height / 2;
@@ -2095,6 +2361,7 @@ void gui_init(void) {
     panic_code = 0;
     network_status.available = 0;
     network_status.link_up = 0;
+    mouse_available_state = 0;
     network_status.ip = 0;
     network_status.gateway = 0;
     network_status.tx_packets = 0;
@@ -2147,6 +2414,12 @@ int gui_keyboard_event(int event, int ctrl, int shift) {
     return gui_keyboard_event_internal(event, ctrl, shift);
 }
 
+void gui_set_mouse_available(int available) {
+    if (!ready) return;
+    mouse_available_state = available ? 1 : 0;
+    gui_request_redraw();
+}
+
 void gui_set_theme(const char* name) {
     if (!ready) return;
     set_palette(name);
@@ -2166,6 +2439,7 @@ void gui_terminal_clear(void) {
     selection_anchor = -1;
     selection_cursor = 0;
     term_view_top = 0;
+    term_view_left = 0;
     gui_request_terminal_redraw();
 }
 
@@ -2184,7 +2458,9 @@ void gui_terminal_begin_input(void) {
 void gui_terminal_edit(const char* text_in, int len, int cursor_pos, uint8_t shell_color) {
     if (!ready || !input_active || !text_in) return;
     if (len < 0) len = 0;
-    if (len >= TERM_COLS) len = TERM_COLS - 1;
+    int max_len = TERM_COLS - input_x - 1;
+    if (max_len < 0) max_len = 0;
+    if (len > max_len) len = max_len;
     if (cursor_pos < 0) cursor_pos = 0;
     if (cursor_pos > len) cursor_pos = len;
 
@@ -2198,7 +2474,7 @@ void gui_terminal_edit(const char* text_in, int len, int cursor_pos, uint8_t she
             term_attr[input_y][input_x + i] = shell_color;
         }
     }
-    input_rendered_len = min_int(len, TERM_COLS - input_x);
+    input_rendered_len = len;
     if (input_rendered_len < 0) input_rendered_len = 0;
     tx = input_x + cursor_pos;
     ty = input_y;
@@ -2217,6 +2493,15 @@ void gui_terminal_set_cursor(int cursor_pos) {
     gui_request_terminal_redraw();
 }
 
+static int terminal_visible_columns(void) {
+    int width = windows[0].w;
+    if (width < MIN_WINDOW_W) width = windows[0].restore_w;
+    int columns = (width - TERM_PAD * 2) / FONT_W;
+    if (columns < 1) columns = 1;
+    if (columns > TERM_COLS) columns = TERM_COLS;
+    return columns;
+}
+
 void gui_terminal_putchar(char c, uint8_t shell_color) {
     if (!ready) return;
     if (c == '\r') {
@@ -2225,8 +2510,9 @@ void gui_terminal_putchar(char c, uint8_t shell_color) {
         return;
     }
     if (c == '\b') {
+        int columns = terminal_visible_columns();
         if (tx > 0) --tx;
-        else if (ty > 0) { --ty; tx = TERM_COLS - 1; }
+        else if (ty > 0) { --ty; tx = columns - 1; }
         term[ty][tx] = ' ';
         term_attr[ty][tx] = 0x0A;
         terminal_follow_bottom();
@@ -2247,7 +2533,8 @@ void gui_terminal_putchar(char c, uint8_t shell_color) {
         return;
     }
     if ((unsigned char)c < 32u) return;
-    if (tx >= TERM_COLS) {
+    int columns = terminal_visible_columns();
+    if (tx >= columns) {
         tx = 0;
         ++ty;
         if (ty >= TERM_ROWS) terminal_scroll_buffer();
@@ -2255,7 +2542,7 @@ void gui_terminal_putchar(char c, uint8_t shell_color) {
     term[ty][tx] = c;
     term_attr[ty][tx] = shell_color;
     ++tx;
-    if (tx >= TERM_COLS) {
+    if (tx >= columns) {
         tx = 0;
         ++ty;
         if (ty >= TERM_ROWS) terminal_scroll_buffer();
@@ -2314,7 +2601,9 @@ void gui_redraw(void) {
     dirty = 0;
     draw_desktop_chrome();
 
-    /* Draw bottom-to-top using the current z order. */
+    /* Paint each window's frame and client area together. This preserves
+     * z-order when windows overlap: a back window cannot repaint over the
+     * title bar or frame of a window stacked above it. */
     for (int i = 0; i < WINDOW_COUNT; ++i) {
         int idx = window_order[i];
         if (idx == 0) draw_window(&windows[idx], "TERMINAL", idx);
@@ -2322,9 +2611,7 @@ void gui_redraw(void) {
         else if (idx == 2) draw_window(&windows[idx], "SETTINGS", idx);
         else if (idx == 3) draw_window(&windows[idx], "CALCULATOR", idx);
         else draw_window(&windows[idx], "SYSTEM MONITOR", idx);
-    }
-    for (int i = 0; i < WINDOW_COUNT; ++i) {
-        int idx = window_order[i];
+
         if (idx == 0) draw_terminal_surface(&windows[idx]);
         else if (idx == 1) draw_sysinfo(&windows[idx]);
         else if (idx == 2) draw_settings(&windows[idx]);
@@ -2348,7 +2635,7 @@ void gui_present(void) {
         int px = dirty_x0, py = dirty_y0;
         int pw = dirty_x1 - dirty_x0, ph = dirty_y1 - dirty_y0;
         if (cursor_drawn_valid)
-            renderer_present_rect(cursor_drawn_x, cursor_drawn_y, 8, 18);
+            renderer_present_rect(cursor_drawn_x, cursor_drawn_y, 12, 20);
         renderer_set_clip_rect(px, py, pw, ph);
         gui_redraw();
         renderer_clear_clip();
@@ -2492,8 +2779,12 @@ static void terminal_mouse_click(void) {
     const struct gui_window* w = &windows[0];
     int inner_x = w->x + TERM_PAD;
     int inner_y = w->y + TITLE_H + 10;
-    int col = (mouse_x_pos - inner_x) / FONT_W;
+    int visible_columns = max_int(1, (w->w - TERM_PAD * 2) / FONT_W);
+    if (visible_columns > TERM_COLS) visible_columns = TERM_COLS;
+    term_view_left = terminal_horizontal_offset(visible_columns);
     int row = (mouse_y_pos - inner_y) / FONT_H + term_view_top;
+    int col = (mouse_x_pos - inner_x) / FONT_W +
+              (input_active && row == input_y ? term_view_left : 0);
     if (col < 0) col = 0;
     if (row < 0) row = 0;
     if (row >= TERM_ROWS) row = TERM_ROWS - 1;
@@ -2567,7 +2858,14 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
 
     if (pressed & 1u) {
         if (log_view_open) {
-            gui_log_close();
+            int row = log_viewer_pointer_row();
+            if (row >= 0) {
+                log_view_selected = row;
+                log_view_ensure_visible();
+                gui_request_redraw();
+            } else if (!log_viewer_pointer_inside()) {
+                gui_log_close();
+            }
         } else if (network_open) {
             if (network_pointer_ping()) {
                 action_push(GUI_ACTION_NET_PING, 0);
@@ -2577,24 +2875,26 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
             gui_request_redraw();
         } else if (filemgr_open) {
             int row=filemgr_pointer_row(), button=filemgr_pointer_button();
-            if(row>=0){filemgr_selected=row;gui_request_redraw();}
+            if(row>=0){filemgr_selected=row;filemgr_ensure_visible();gui_request_redraw();}
             else if(button==1){action_push_arg(GUI_ACTION_FILE_CREATE,0);gui_request_redraw();}
             else if(button==2){action_push_arg(GUI_ACTION_DIR_CREATE,0);gui_request_redraw();}
             else if(button==3&&filemgr_selected<file_count){action_push_arg(GUI_ACTION_FILE_DELETE,file_data[filemgr_selected].index);gui_request_redraw();}
         } else if (taskmgr_open) {
             int row=taskmgr_pointer_row(), button=taskmgr_pointer_button();
-            if(row>=0){taskmgr_selected=row;gui_request_redraw();}
+            if(row>=0){taskmgr_selected=row;taskmgr_ensure_visible();gui_request_redraw();}
             else if(button==1&&taskmgr_selected<task_count){int idx=task_order[taskmgr_selected];if(idx>=0&&idx<task_count)action_push_arg(GUI_ACTION_TASK_TERMINATE,task_data[idx].pid);gui_request_redraw();}
             else if(button==2&&taskmgr_selected<task_count){int idx=task_order[taskmgr_selected];if(idx>=0&&idx<task_count)action_push_arg(GUI_ACTION_TASK_RESTART,task_data[idx].pid);gui_request_redraw();}
         } else if (launcher_open) {
             int launcher_item = -1;
             if (point_in_launcher_item(&launcher_item)) {
-                open_window(launcher_item);
+                open_launcher_app(launcher_item);
                 launcher_open = 0;
                 launcher_reset_search();
                 gui_request_redraw_rect(0, 0, LAUNCHER_W + 20, TOPBAR_H + LAUNCHER_H + 18);
             } else if (point_in_launcher_button()) {
                 launcher_toggle();
+            } else if (point_in_launcher_search()) {
+                /* Keep the launcher open so keyboard search can continue. */
             } else {
                 launcher_open = 0;
                 launcher_reset_search();
@@ -2620,6 +2920,17 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
                 quick_settings_open = 0;
                 gui_request_redraw_rect(0, TOPBAR_H, (int)f->width, QUICK_H + 18);
             }
+        } else if (power_open) {
+            if (point_in_power_button(0)) {
+                action_push(GUI_ACTION_REBOOT, 0);
+                power_open = 0;
+            } else if (point_in_power_button(1)) {
+                action_push(GUI_ACTION_SHUTDOWN, 0);
+                power_open = 0;
+            } else {
+                power_open = 0;
+            }
+            gui_request_redraw();
         } else if (point_in_launcher_button()) {
             launcher_toggle();
         } else if (point_in_notification_clear()) {
@@ -2639,14 +2950,6 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
         } else if (point_in_clock_capsule()) {
             quick_settings_open = 0;
             open_window(4);
-        } else if (point_in_power_button(0)) {
-            action_push(GUI_ACTION_REBOOT, 0);
-            power_open = 0;
-            gui_request_redraw();
-        } else if (point_in_power_button(1)) {
-            action_push(GUI_ACTION_SHUTDOWN, 0);
-            power_open = 0;
-            gui_request_redraw();
         } else if (dock_hot >= 0) {
             if (dock_hot == 5) {
                 power_open = !power_open;
@@ -2777,6 +3080,43 @@ void gui_mouse_event(int dx, int dy, int wheel, uint8_t new_buttons) {
         mouse_capture_mode = 0;
     }
 
+    if (wheel != 0 && log_view_open && log_viewer_pointer_inside()) {
+        int rows = 0;
+        (void)log_viewer_geometry(0, 0, 0, 0, &rows);
+        log_view_top = max_int(0, min_int(log_view_top + (wheel > 0 ? -3 : 3),
+                                          max_int(0, log_view_count - rows)));
+        if (log_view_count > 0) {
+            log_view_selected = max_int(log_view_top,
+                min_int(log_view_selected, min_int(log_view_count - 1, log_view_top + rows - 1)));
+        }
+        gui_request_redraw();
+    }
+
+    if (wheel != 0 && taskmgr_open && taskmgr_pointer_inside()) {
+        int rows = 0;
+        (void)taskmgr_geometry(0, 0, 0, 0, &rows);
+        taskmgr_top = max_int(0, min_int(taskmgr_top + (wheel > 0 ? -3 : 3),
+                                         max_int(0, task_count - rows)));
+        if (task_count > 0) {
+            if (taskmgr_selected < taskmgr_top) taskmgr_selected = taskmgr_top;
+            if (taskmgr_selected >= taskmgr_top + rows)
+                taskmgr_selected = min_int(task_count - 1, taskmgr_top + rows - 1);
+        }
+        gui_request_redraw();
+    }
+    if (wheel != 0 && filemgr_open && filemgr_pointer_inside()) {
+        int rows = 0;
+        (void)filemgr_geometry(0, 0, 0, 0, &rows);
+        filemgr_top = max_int(0, min_int(filemgr_top + (wheel > 0 ? -3 : 3),
+                                         max_int(0, file_count - rows)));
+        if (file_count > 0) {
+            if (filemgr_selected < filemgr_top) filemgr_selected = filemgr_top;
+            if (filemgr_selected >= filemgr_top + rows)
+                filemgr_selected = min_int(file_count - 1, filemgr_top + rows - 1);
+        }
+        gui_request_redraw();
+    }
+
     if (wheel != 0 && mouse_capture_window < 0 &&
         inside_window(&windows[0], mouse_x_pos, mouse_y_pos)) {
         int delta = wheel > 0 ? -3 : 3;
@@ -2843,6 +3183,6 @@ int gui_take_terminal_cursor(int* cursor_pos) {
 int gui_poll_action(gui_action_t* out) {
     if (!out || action_tail == action_head) return 0;
     *out = action_queue[action_tail];
-    action_tail = (action_tail + 1) % 4;
+    action_tail = (action_tail + 1) % GUI_ACTION_QUEUE_CAPACITY;
     return 1;
 }

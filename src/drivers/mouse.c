@@ -70,8 +70,6 @@ static void queue_event(int32_t dx, int32_t dy, int32_t wheel, uint8_t new_butto
     if (sensitivity > 200) sensitivity = 200;
     dx = (dx * (int32_t)sensitivity) / 100;
     dy = (dy * (int32_t)sensitivity) / 100;
-    uint8_t next = (uint8_t)((head + 1u) % MOUSE_IRQ_BUFFER);
-    if (next == tail) return;
     x += dx;
     y += dy;
     if (x < 0) x = 0;
@@ -79,6 +77,13 @@ static void queue_event(int32_t dx, int32_t dy, int32_t wheel, uint8_t new_butto
     if (x > max_x) x = max_x;
     if (y > max_y) y = max_y;
     buttons = new_buttons;
+
+    uint8_t next = (uint8_t)((head + 1u) % MOUSE_IRQ_BUFFER);
+    if (next == tail) {
+        /* Keep the newest button state and motion rather than freezing input
+         * when the consumer briefly falls behind the interrupt stream. */
+        tail = (uint8_t)((tail + 1u) % MOUSE_IRQ_BUFFER);
+    }
     queue[head].dx = dx;
     queue[head].dy = dy;
     queue[head].wheel = wheel;
@@ -89,6 +94,7 @@ static void queue_event(int32_t dx, int32_t dy, int32_t wheel, uint8_t new_butto
 int mouse_init(void) {
     present = 0;
     packet_index = 0;
+    packet_size = 3;
     head = tail = 0;
     x = 0;
     y = 0;
@@ -111,16 +117,28 @@ int mouse_init(void) {
     wait_input_clear();
     outb(KBD_DATA, config);
 
-    /* Prefer a stable standard PS/2 motion profile. Some old devices do not
-     * implement these optional commands, so failure here is non-fatal. */
-    (void)aux_command(0xF3u, 200u); /* sample rate */
-    (void)aux_command(0xE8u, 2u);   /* resolution */
+    /* IntelliMouse wheel negotiation: the 200/100/80 sample-rate sequence
+     * enables a four-byte packet on compatible devices. Older mice remain
+     * supported and continue using the standard three-byte packet. */
+    int wheel_mouse = 0;
+    if (aux_command(0xF3u, 200u) &&
+        aux_command(0xF3u, 100u) &&
+        aux_command(0xF3u, 80u)) {
+        uint8_t ack = 0, id = 0;
+        if (aux_write(0xF2u) && aux_read(&ack) && ack == 0xFAu &&
+            aux_read(&id) && (id == 0x03u || id == 0x04u))
+            wheel_mouse = 1;
+    }
+    packet_size = wheel_mouse ? 4u : 3u;
+
+    /* Optional tuning is non-fatal for older or non-standard devices. */
+    (void)aux_command(0xF3u, 200u);
+    (void)aux_command(0xE8u, 2u);
 
     if (!aux_write(0xF4)) return 0; /* enable streaming */
     uint8_t ack = 0;
     if (!aux_read(&ack) || ack != 0xFAu) return 0;
 
-    packet_size = 3;
     present = 1;
     x = 0;
     y = 0;
@@ -155,6 +173,19 @@ int32_t mouse_x(void) { return x; }
 int32_t mouse_y(void) { return y; }
 uint8_t mouse_buttons(void) { return buttons; }
 
+static void process_mouse_packet(void) {
+    if (packet_bytes[0] & 0xC0u) return; /* overflow: discard packet */
+    int32_t dx = (int8_t)packet_bytes[1];
+    int32_t dy = -(int32_t)(int8_t)packet_bytes[2];
+    int32_t wheel = 0;
+    if (packet_size == 4u) {
+        uint8_t nibble = packet_bytes[3] & 0x0Fu;
+        wheel = (nibble & 0x08u) ? (int32_t)nibble - 16 : (int32_t)nibble;
+    }
+    /* Convert PS/2 +Y (physical up) to screen +Y (down). */
+    queue_event(dx, dy, wheel, packet_bytes[0] & 0x07u);
+}
+
 void mouse_irq_handler(void) {
     uint8_t status = inb(KBD_STATUS);
     if (!(status & 0x01u) || !(status & 0x20u)) return;
@@ -164,10 +195,27 @@ void mouse_irq_handler(void) {
     packet_bytes[packet_index++] = value;
     if (packet_index < packet_size) return;
     packet_index = 0;
-
-    if (packet_bytes[0] & 0xC0u) return; /* overflow: discard packet */
-    int32_t dx = (int8_t)packet_bytes[1];
-    int32_t dy = -(int32_t)(int8_t)packet_bytes[2];
-    /* Convert PS/2 +Y (physical up) to screen +Y (down). */
-    queue_event(dx, dy, 0, packet_bytes[0] & 0x07u);
+    process_mouse_packet();
 }
+
+#ifdef UNIT_TEST
+void mouse_test_reset(void) {
+    packet_index = 0;
+    packet_size = 3;
+    head = tail = 0;
+    x = y = 0;
+    buttons = 0;
+    max_x = 1023;
+    max_y = 767;
+    sensitivity = 100;
+}
+
+void mouse_test_feed_wheel_packet(uint8_t flags, uint8_t dx, uint8_t dy, uint8_t wheel) {
+    packet_size = 4;
+    packet_bytes[0] = flags;
+    packet_bytes[1] = dx;
+    packet_bytes[2] = dy;
+    packet_bytes[3] = wheel;
+    process_mouse_packet();
+}
+#endif

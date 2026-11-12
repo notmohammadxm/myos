@@ -64,6 +64,9 @@ static void test_gui_calculator(void) {
     check(gui_test_calculate("-8+3", &value) && value == -5);
     check(!gui_test_calculate("1/0", &value));
     check(!gui_test_calculate("2+", &value));
+    check(gui_test_calculate("-(3+2)", &value) && value == -5);
+    check(gui_test_calculate("+(2*3)", &value) && value == 6);
+    check(gui_test_calculate("-(-3+1)", &value) && value == 2);
 }
 
 static void test_history_ring(void) {
@@ -201,6 +204,24 @@ static void test_mouse_sensitivity(void) {
     check(mouse_get_sensitivity() == 100);
 }
 
+static void test_mouse_packets(void) {
+    mouse_event_t event;
+    mouse_test_reset();
+    mouse_test_feed_wheel_packet(0x09u, 5u, 3u, 0x0Fu);
+    check(mouse_poll(&event));
+    check(event.dx == 5 && event.dy == -3 && event.wheel == -1);
+    check((event.buttons & 1u) != 0u);
+
+    mouse_test_reset();
+    for (int i = 0; i < 70; ++i)
+        mouse_test_feed_wheel_packet(0x09u, 1u, 0u, 0u);
+    check(mouse_x() == 70);
+    check(mouse_buttons() == 1u);
+    int queued = 0;
+    while (mouse_poll(&event)) ++queued;
+    check(queued == 63);
+}
+
 static void test_line_editor(void) {
     for (int i = 0; i < VGA_CELLS; ++i) unit_test_vga[i] = 0x0A20;
 
@@ -256,6 +277,7 @@ int test_main(void) {
     test_filesystem();
     test_scheduler_model();
     test_mouse_sensitivity();
+    test_mouse_packets();
     test_framebuffer_gui();
     test_network_helpers();
     test_font_presence();

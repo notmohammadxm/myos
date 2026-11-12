@@ -121,3 +121,19 @@ Full ISO/QEMU boot testing still requires NASM, GRUB and QEMU, which are not ins
 - GUI clock synchronization is rate-limited to once per timer second, avoiding repeated RTC reads during the same tick.
 - Added GUI window shortcuts from the shell input path: `Ctrl+1` Terminal, `Ctrl+2` System Information, `Ctrl+3` Settings, `Ctrl+4` Calculator, `Ctrl+5` System Monitor.
 - Added unit coverage for the GUI calculator evaluator.
+
+## GUI and input stability pass
+
+- Fixed launcher filtering and mouse activation for Task Manager, Files and System Logs.
+- System Logs now supports pointer selection, keyboard navigation and mouse-wheel scrolling.
+- Right-side desktop windows use a responsive two-panel layout at 1024x600 and other supported heights.
+- Compact System Information and Settings layouts keep content inside their windows.
+- Calculator supports unary signs before parenthesized expressions and keeps its keypad inside the window.
+- PS/2 IntelliMouse-compatible devices negotiate four-byte packets for wheel input; standard three-byte mice remain supported.
+- Mouse input preserves pointer/button state when the event queue is full.
+- GUI action queue capacity increased to reduce dropped user actions.
+- Host regression tests cover signed calculator groups, mouse wheel decoding and queue overflow.
+- Terminal output wraps to the actual window width and long command lines scroll horizontally without truncation.
+- Overlapping windows preserve paint order; file and task lists scroll with matching keyboard, pointer and wheel hit targets.
+- Topbar network and mouse indicators reflect driver/link state, and 12-hour clocks include AM/PM.
+- Pull requests targeting `main` run the same host tests, ISO build, Multiboot2 validation and QEMU smoke test as main pushes; superseded runs for the same PR are cancelled.

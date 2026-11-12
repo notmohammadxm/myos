@@ -232,11 +232,12 @@ void fs_init(void) {
         fs_persistent = 1;
         return;
     }
-    fs_seed_defaults();
+    /* The seed helpers use the public mutation API, which requires fs_ready. */
     fs_ready = 1;
+    fs_seed_defaults();
     if (fs_disk_geometry_ok()) {
         fs_persistent = 1;
-        (void)fs_sync_disk();
+        if (!fs_sync_disk()) fs_persistent = 0;
     }
 }
 
