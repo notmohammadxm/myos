@@ -166,7 +166,7 @@ static void test_framebuffer_gui(void) {
     };
     gui_notification_set_data(notification_data, 2);
     check(gui_test_notification_count() == 2);
-    gui_mouse_event(477, -272, 0, 1); /* notification bell */
+    gui_mouse_event(767, -527, 0, 1); /* notification bell */
     gui_mouse_event(0, 0, 0, 0);
     check(gui_test_notification_visible());
     gui_mouse_event(-167, 441, 0, 1); /* Clear all */
@@ -180,7 +180,7 @@ static void test_framebuffer_gui(void) {
 
     /* Escape closes the notification overlay without deleting its messages. */
     gui_notification_set_data(notification_data, 2);
-    gui_mouse_event(477, -272, 0, 1);
+    gui_mouse_event(167, -441, 0, 1);
     gui_mouse_event(0, 0, 0, 0);
     check(gui_test_notification_visible());
     check(gui_keyboard_event(0x8C, 0, 0));
