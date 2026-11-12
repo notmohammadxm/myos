@@ -2,6 +2,7 @@
 set -eu
 
 systemctl enable sddm.service
+systemctl enable myos-live-smoke.service
 printf '%s\n' 'sddm shared/default-x-display-manager select sddm' | debconf-set-selections
 
 systemctl enable NetworkManager.service
