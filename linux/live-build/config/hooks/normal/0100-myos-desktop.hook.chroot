@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+systemctl enable sddm.service
+systemctl enable NetworkManager.service
