@@ -4,16 +4,12 @@ live-config
 live-config-systemd
 systemd-sysv
 linux-image-amd64
-firmware-linux-free
 firmware-linux
 firmware-iwlwifi
 firmware-realtek
 firmware-brcm80211
 firmware-atheros
 firmware-mediatek
-wpasupplicant
-wireless-regdb
-
 # Graphical session: KDE Plasma on Wayland
 plasma-desktop
 plasma-workspace
